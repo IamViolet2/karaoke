@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 대화창 AI용 프롬프트·점검 결과 (npm run ai:context / ai:check)
+/.ai/

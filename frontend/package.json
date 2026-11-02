@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "ai:context": "node scripts/ai/context.mjs",
+    "ai:check": "node scripts/ai/check.mjs"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
