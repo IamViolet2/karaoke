@@ -1,0 +1,880 @@
+<meta charset="utf-8">
+<title>프론트엔드 컨텍스트 엔지니어링</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<style>
+  /* 레이아웃: 프론트 담당이 작업하며 옆에 띄워 두는 한 줄 문서. 위에 붙는 목차 → 왜 → 한 바퀴 → 프롬프트 해부 → 파일 지도
+     → 도구 → 답변 형식 → VS Code → 대화 관리 → 서비스 차이 → 문제 대처 → 실습·체크리스트.
+     색은 04·05 매뉴얼과 같은 제품 팔레트 — 밝은 테마 = `/`·`/admin`의 낮 팔레트, 어두운 테마 = `/booth`의 무대 팔레트 */
+  :root {
+    --canvas:#F1F3F1; --surface:#FFFFFF; --raised:#F6F7F5;
+    --line:#E3E6E2; --line-strong:#C9CDC6;
+    --ink:#15181A; --ink-2:#51565B; --ink-3:#868C90;
+    --brass:#7A5510; --brass-soft:#F7EFDE; --on-brass:#FFFFFF;
+    --live:#A92B22; --live-soft:#FBEBE9;
+    --free:#116B4E; --free-soft:#E4F2EC;
+    --term:#16181B; --term-line:#2A2D31; --term-ink:#E6E8E4; --term-dim:#8D948F; --term-key:#E9BC5E; --term-ok:#5FD3A2; --term-bad:#FF7A6B;
+    --display:"Black Han Sans", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+    --sans:"Noto Sans KR", system-ui, -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    --mono:"JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --canvas:#0B0A0D; --surface:#141318; --raised:#1D1B22;
+      --line:#2A2830; --line-strong:#3C3946;
+      --ink:#F3F1F5; --ink-2:#B3AEBD; --ink-3:#7D7889;
+      --brass:#E9BC5E; --brass-soft:#2B2214; --on-brass:#17130A;
+      --live:#FF6150; --live-soft:#2C1513;
+      --free:#4FDCA6; --free-soft:#0E2B22;
+      --term:#1D1B22; --term-line:#3C3946; --term-ink:#F3F1F5; --term-dim:#7D7889; --term-key:#E9BC5E; --term-ok:#4FDCA6; --term-bad:#FF6150;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --canvas:#0B0A0D; --surface:#141318; --raised:#1D1B22;
+    --line:#2A2830; --line-strong:#3C3946;
+    --ink:#F3F1F5; --ink-2:#B3AEBD; --ink-3:#7D7889;
+    --brass:#E9BC5E; --brass-soft:#2B2214; --on-brass:#17130A;
+    --live:#FF6150; --live-soft:#2C1513;
+    --free:#4FDCA6; --free-soft:#0E2B22;
+    --term:#1D1B22; --term-line:#3C3946; --term-ink:#F3F1F5; --term-dim:#7D7889; --term-key:#E9BC5E; --term-ok:#4FDCA6; --term-bad:#FF6150;
+    color-scheme: dark;
+  }
+
+  html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 64px); }
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.72; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 20; background: var(--canvas); }
+  .wrap {
+    --gut: max(16px, min(4vw, 32px));
+    max-width: 960px; margin: 0 auto; padding-block: 0 96px;
+    padding-left: max(var(--gut), env(safe-area-inset-left, 0px));
+    padding-right: max(var(--gut), env(safe-area-inset-right, 0px));
+  }
+  h1, h2, h3, h4 { margin: 0; line-height: 1.3; text-wrap: balance; }
+  p { margin: 0; }
+  a { color: var(--brass); text-underline-offset: 3px; }
+  strong { color: var(--ink); font-weight: 700; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--raised); border: 1px solid var(--line); padding: .05em .38em; border-radius: 5px; color: var(--ink); overflow-wrap: anywhere; }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
+  kbd { font-family: var(--mono); font-size: .8em; font-weight: 700; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-bottom-width: 2px; padding: .05em .42em; border-radius: 6px; white-space: nowrap; }
+
+  /* ── 표지 ─────────────────────────────────────────── */
+  .cover { padding-block: 56px 28px; display: flex; flex-direction: column; gap: 16px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .12em; color: var(--brass); }
+  .cover h1 { font-family: var(--display); font-weight: 400; font-size: clamp(34px, 6.4vw, 58px); line-height: 1.08; letter-spacing: -.01em; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: var(--ink-3); }
+  .meta b { color: var(--ink-2); font-weight: 700; margin-right: 6px; }
+  .golden { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 6px; }
+  .golden div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; }
+  .golden .n { font-family: var(--display); font-size: 26px; color: var(--brass); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .golden .d { font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+
+  /* ── 위에 붙는 목차 ───────────────────────────────── */
+  .toc { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--canvas); border-block: 1px solid var(--line);
+         margin-left: calc(-1 * max(var(--gut), env(safe-area-inset-left, 0px))); margin-right: calc(-1 * max(var(--gut), env(safe-area-inset-right, 0px)));
+         padding-left: max(var(--gut), env(safe-area-inset-left, 0px)); padding-right: max(var(--gut), env(safe-area-inset-right, 0px)); }
+  .toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: row; gap: 2px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .toc a { display: inline-block; padding: 11px 10px; font-size: 13.5px; font-weight: 700; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent; }
+  .toc a:hover { color: var(--ink); border-bottom-color: var(--brass); }
+
+  /* ── 큰 구획 ──────────────────────────────────────── */
+  .block { padding-top: 64px; display: flex; flex-direction: column; gap: 18px; }
+  .part-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 2px solid var(--ink); }
+  .part-head .no { font-family: var(--display); font-size: clamp(34px, 6vw, 50px); color: var(--brass); line-height: 1; font-variant-numeric: tabular-nums; }
+  .part-head h2 { font-size: clamp(23px, 3.6vw, 29px); font-weight: 800; letter-spacing: -.01em; }
+  .part-head .sub { flex-basis: 100%; color: var(--ink-2); font-size: 15px; }
+  h3 { font-size: 19px; font-weight: 800; letter-spacing: -.01em; }
+  h4 { font-size: 15px; font-weight: 800; }
+  .section { display: flex; flex-direction: column; gap: 14px; padding-top: 30px; }
+  .section > p, li { color: var(--ink-2); }
+  ol, ul { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+
+  /* ── 표 ───────────────────────────────────────────── */
+  .tw { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
+  th { text-align: left; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--ink-3); padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+  tr:last-child td { border-bottom: none; }
+  td.k { color: var(--ink); font-weight: 700; }
+  th.num { text-align: right; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-3); text-align: right; }
+  .wide { min-width: 760px; }
+  tr.group td { background: var(--raised); font-size: 12px; font-weight: 800; letter-spacing: .04em; color: var(--ink-3); padding-block: 7px; }
+  td code { white-space: nowrap; overflow-wrap: normal; }
+  .paths { display: flex; flex-direction: column; gap: 3px; }
+  .paths code { background: transparent; border: none; padding: 0; color: var(--ink); font-size: 13px; }
+  .big { font-family: var(--sans); font-size: 11px; font-weight: 800; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 45%, transparent); border-radius: 999px; padding: 0 7px; margin-left: 6px; white-space: nowrap; }
+
+  /* ── 알림 상자 ────────────────────────────────────── */
+  .note { display: flex; gap: 12px; align-items: flex-start; padding: 13px 15px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+  .tag { flex: none; font-size: 11.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px; margin-top: 2px; background: var(--surface); color: var(--ink-2); border: 1px solid var(--line-strong); }
+  .note.warn { background: var(--live-soft); border-color: color-mix(in srgb, var(--live) 30%, transparent); }
+  .note.warn .tag { background: var(--live); color: var(--canvas); border-color: transparent; }
+  .note.ok { background: var(--free-soft); border-color: color-mix(in srgb, var(--free) 30%, transparent); }
+  .note.ok .tag { background: var(--free); color: var(--canvas); border-color: transparent; }
+  .note > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+  /* ── 명령 상자 · 터미널 출력 ──────────────────────── */
+  .code { position: relative; min-width: 0; }
+  .code .where { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-bottom: 6px; }
+  .code pre, .out { margin: 0; background: var(--term); color: var(--term-ink); border: 1px solid var(--term-line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; }
+  .code pre { padding-right: 64px; }
+  .code pre .c, .out .c { color: var(--term-dim); }
+  .out .ok { color: var(--term-ok); }
+  .out .bad { color: var(--term-bad); }
+  .out .key { color: var(--term-key); }
+  .out.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .shot { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .copy { position: absolute; right: 8px; bottom: 8px; font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--term-dim); background: transparent; border: 1px solid var(--term-line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .copy:hover { color: var(--term-ink); border-color: var(--term-dim); }
+  .cap { font-size: 12.5px; color: var(--ink-3); }
+
+  /* ── 비교 두 칸 ───────────────────────────────────── */
+  .duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+  .duo > div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .duo .lbl { font-size: 12px; font-weight: 800; letter-spacing: .04em; color: var(--ink-3); }
+  .duo .ours { border-color: color-mix(in srgb, var(--brass) 55%, transparent); }
+  .duo .ours .lbl { color: var(--brass); }
+  .duo ul { font-size: 14px; gap: 4px; }
+
+  /* ── 한 바퀴 ──────────────────────────────────────── */
+  .cycle { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; counter-reset: cy; }
+  .cycle li { counter-increment: cy; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--ink-2); font-size: 14px; }
+  .cycle li.stop { border-color: color-mix(in srgb, var(--brass) 60%, transparent); background: var(--brass-soft); }
+  .cy-top { display: flex; align-items: center; gap: 9px; }
+  .cy-top::before { content: counter(cy); width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--brass); color: var(--on-brass); display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 13px; }
+  .cy-top b { color: var(--ink); font-size: 15px; }
+  .who { margin-left: auto; font-size: 11px; font-weight: 800; color: var(--ink-2); background: var(--raised); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
+  .who.ai { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, transparent); }
+  .loops { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+
+  /* ── 대화 예시 ────────────────────────────────────── */
+  .chat { background: var(--raised); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: min(560px, 92%); border-radius: 14px; padding: 11px 14px; font-size: 14px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .msg .from { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--ink-3); }
+  .msg.me { align-self: flex-end; background: var(--brass-soft); border: 1px solid color-mix(in srgb, var(--brass) 35%, transparent); color: var(--ink); }
+  .msg.ai { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); color: var(--ink-2); }
+  .msg ul { font-size: 14px; gap: 3px; }
+  .msg .file { font-family: var(--mono); font-size: 12.5px; background: var(--term); color: var(--term-ink); border-radius: 8px; padding: 9px 11px; overflow-x: auto; white-space: pre; }
+  .msg .attach { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12.5px; background: var(--surface); border: 1px dashed var(--line-strong); border-radius: 8px; padding: 6px 10px; color: var(--ink-2); }
+
+  /* ── 프롬프트 해부 ────────────────────────────────── */
+  .stack { display: flex; height: 44px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface); }
+  .stack span { display: block; height: 100%; min-width: 3px; border-right: 2px solid var(--surface); }
+  .stack span:last-child { border-right: none; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 7px; flex: none; }
+  .l1 { background: var(--ink-2); } .l2 { background: var(--ink-3); } .l3 { background: var(--free); }
+  .l4 { background: var(--brass); } .l5 { background: var(--live); } .l6 { background: var(--line-strong); }
+  .stack-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink-3); }
+  .stack-legend span { display: inline-flex; align-items: center; }
+  td .lyr { display: flex; align-items: center; color: var(--ink); font-weight: 700; white-space: nowrap; }
+  .nos { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nos span { font-size: 13.5px; font-weight: 700; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 10px; }
+  .nos span::before { content: "×"; color: var(--live); font-weight: 800; margin-right: 6px; }
+
+  /* ── 틀 4종 ───────────────────────────────────────── */
+  .tpls { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .tpl { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 15px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .tpl .t { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--brass); }
+  .tpl h4 { font-size: 16px; }
+  .tpl p { font-size: 13.5px; color: var(--ink-2); }
+
+  /* ── 답변 형식 약속 ───────────────────────────────── */
+  .pledge { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0; counter-reset: pl; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  .pledge > li { counter-increment: pl; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 14px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+  .pledge > li:last-child { border-bottom: none; }
+  .pledge > li::before { content: counter(pl); grid-row: span 3; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--brass); color: var(--brass); display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 13px; }
+  .pledge b { color: var(--ink); font-size: 15px; }
+  .pledge .why { font-size: 14px; color: var(--ink-2); }
+  .pledge .if { font-size: 13.5px; color: var(--ink-3); }
+  .pledge .if q { color: var(--ink); quotes: "“" "”"; }
+
+  /* ── VS Code 요령 ─────────────────────────────────── */
+  .howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .ht { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .ht h4 { font-size: 16px; }
+  .ht ol { font-size: 14px; gap: 5px; }
+  .ht .warnline { font-size: 13px; color: var(--live); font-weight: 700; }
+
+  /* ── 보낼 말 ──────────────────────────────────────── */
+  .phrases { display: flex; flex-direction: column; gap: 8px; }
+  .phrase { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px 9px 14px; }
+  .phrase .when { display: block; font-size: 12px; font-weight: 700; color: var(--ink-3); }
+  .phrase .text { display: block; color: var(--ink); font-weight: 500; font-size: 14.5px; }
+  .chip-copy { font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: var(--brass); background: var(--brass-soft); border: 1px solid color-mix(in srgb, var(--brass) 40%, transparent); border-radius: 8px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  .chip-copy:hover { border-color: var(--brass); }
+
+  /* ── 실습 카드 ────────────────────────────────────── */
+  .labs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .lab { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .lab .t { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .lab .t span { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--brass); }
+  .lab h4 { font-size: 16.5px; }
+  .lab p { font-size: 14px; color: var(--ink-2); }
+  .lab dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; font-size: 13px; }
+  .lab dt { color: var(--ink-3); font-weight: 700; }
+  .lab dd { margin: 0; color: var(--ink-2); min-width: 0; }
+
+  /* ── 체크리스트 ───────────────────────────────────── */
+  .checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+  .check { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .check h4 { padding: 12px 15px; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .check label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 15px; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--ink-2); cursor: pointer; }
+  .check label:last-child { border-bottom: none; }
+  .check input { margin-top: 5px; width: 15px; height: 15px; flex: none; accent-color: var(--brass); }
+  .check input:checked + span { color: var(--ink-3); text-decoration: line-through; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .reset { font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .small { font-size: 13px; color: var(--ink-3); }
+
+  footer { margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-3); display: flex; flex-direction: column; gap: 10px; }
+  footer ul { padding-left: 18px; gap: 4px; }
+
+  @media (max-width: 560px) {
+    .pledge > li { grid-template-columns: 1fr; }
+    .pledge > li::before { grid-row: auto; }
+    .phrase { grid-template-columns: 1fr; }
+    .phrase .chip-copy { justify-self: start; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="cover">
+  <div class="eyebrow">본편 06 · 프론트엔드 담당 · 대화창 AI</div>
+  <h1>대화창 AI로<br>프론트엔드 만들기</h1>
+  <p class="lede">AI 에이전트 없이, 웹 대화창 AI와 VS Code만으로 노래방 부스 프론트엔드를 고치고 기능을 더하는 방법입니다. 대화창 AI는 우리 파일을 볼 수 없습니다. 그래서 필요한 정보를 골라 한 번에 넣어 주는 일, 곧 <strong>컨텍스트 엔지니어링</strong>이 작업의 중심입니다. 그 일을 도구 두 개가 돕습니다.</p>
+  <div class="meta">
+    <span><b>대상</b>프론트엔드 담당 학생 · 지도 교사</span>
+    <span><b>기준</b><code>karaoke</code> 브랜치 · <code>frontend/scripts/ai</code></span>
+    <span><b>AI 서비스</b>어떤 것이든 (복사·붙여넣기 기준)</span>
+  </div>
+  <div class="golden" aria-label="외워 둘 것">
+    <div><span class="n">계획 먼저</span><span class="d">AI는 계획만 말하고 멈춥니다. 내가 “진행”이라고 해야 코드를 줍니다</span></div>
+    <div><span class="n">파일 1개</span><span class="d">한 답변에 파일 하나. 첫 줄부터 마지막 줄까지 빠짐없이 받습니다</span></div>
+    <div><span class="n">400줄</span><span class="d">이보다 큰 파일은 고치지 않고 새 작은 파일로 뺍니다. 꼭 고치면 나눠 받습니다</span></div>
+    <div><span class="n">명령 2개</span><span class="d"><code>ai:context</code>로 프롬프트를 만들고 <code>ai:check</code>로 붙여 넣은 결과를 점검합니다</span></div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ul>
+    <li><a href="#why">왜 이 방식</a></li>
+    <li><a href="#cycle">한 바퀴</a></li>
+    <li><a href="#layers">프롬프트 해부</a></li>
+    <li><a href="#map">파일 지도</a></li>
+    <li><a href="#tools">도구</a></li>
+    <li><a href="#pledge">답변 형식</a></li>
+    <li><a href="#vscode">VS Code</a></li>
+    <li><a href="#chat">대화 관리</a></li>
+    <li><a href="#service">서비스 차이</a></li>
+    <li><a href="#trouble">문제 대처</a></li>
+    <li><a href="#practice">실습·점검</a></li>
+  </ul>
+</nav>
+
+<!-- ═══════════════════════════════════════════ 1 -->
+<section class="block" id="why">
+  <div class="part-head">
+    <span class="no">01</span><h2>왜 이 방식인가</h2>
+    <p class="sub">대화창 AI가 아는 것은 내가 붙여 넣은 글뿐입니다. 무엇을 넣느냐가 답의 품질을 정합니다.</p>
+  </div>
+
+  <div class="duo">
+    <div>
+      <span class="lbl">AI 에이전트 방식 (우리는 쓰지 않음)</span>
+      <ul>
+        <li>AI가 저장소의 파일을 직접 열어 읽습니다</li>
+        <li>AI가 파일을 직접 고치고 명령도 실행합니다</li>
+        <li><code>.agents/rules</code>는 이름만 대면 AI가 찾아 읽습니다</li>
+        <li>틀리면 AI가 실행해 보고 스스로 고칩니다</li>
+      </ul>
+    </div>
+    <div class="ours">
+      <span class="lbl">대화창 방식 (우리가 쓰는 방식)</span>
+      <ul>
+        <li>AI는 <strong>내가 붙여 넣은 글만</strong> 압니다. 파일 이름만 대면 모릅니다</li>
+        <li>코드는 <strong>내가</strong> VS Code에 붙여 넣습니다</li>
+        <li>규칙도 <strong>내용을</strong> 넣어야 지킵니다 (도구가 넣어 줍니다)</li>
+        <li>틀린 곳은 <strong>내가</strong> <code>ai:check</code>와 눈으로 잡습니다</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>AI에게 “우리 프로젝트의 관리자 화면에 버튼을 달아 줘”라고만 쓰면, AI는 우리 화면을 본 적이 없으므로 그럴듯한 다른 프로젝트의 코드를 지어냅니다. 우리 폴더 구조, 색 이름, 백엔드 API, 기존 코드를 함께 주면 우리 코드에 맞는 답이 나옵니다. 이렇게 <strong>AI가 볼 글을 필요한 만큼, 정확하게, 순서대로 골라 넣는 일</strong>을 컨텍스트 엔지니어링이라고 합니다. 문장을 멋지게 쓰는 것보다 무엇을 넣느냐가 훨씬 중요합니다.</p>
+
+  <div class="note warn"><span class="tag">나이</span><div><p>AI 서비스마다 쓸 수 있는 나이와 조건(보호자 동의 등)이 다릅니다. 쓰기 전에 선생님과 함께 학교 지침과 서비스 이용 조건을 확인합니다. 이 매뉴얼은 특정 서비스를 정하지 않고, 어느 서비스에서나 되는 <strong>복사·붙여넣기</strong>만 씁니다.</p></div></div>
+  <div class="note warn"><span class="tag">비밀</span><div><p><code>.env</code> 파일, API 키, 관리자 PIN, 장치 키(<code>DEVICE_API_KEY</code>), 실제 예약자 이름과 전화번호는 대화창에 넣지 않습니다. <code>ai:context</code>는 <code>.env</code> 파일을 거부하고 키처럼 생긴 글자를 <code>[가림]</code>으로 바꾸지만, 보내기 전 마지막 확인은 사람이 합니다.</p></div></div>
+  <div class="note"><span class="tag">03 대신</span><div><p><code>AGENTS.md</code>의 “역할 지정 + rules/skills 참고” 문구와 03 핸드오버 가이드의 프론트엔드 프롬프트 틀은 파일을 직접 읽는 에이전트용입니다. 대화창에서는 이 문서의 도구가 규칙 원문과 파일 내용을 넣어 주므로, 프론트엔드 작업은 이 문서를 따릅니다.</p></div></div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 2 -->
+<section class="block" id="cycle">
+  <div class="part-head">
+    <span class="no">02</span><h2>작업 한 바퀴</h2>
+    <p class="sub">아홉 걸음입니다. 색칠한 4번(계획 확인)과 8번(눈으로 확인)은 절대 건너뛰지 않습니다.</p>
+  </div>
+
+  <ol class="cycle">
+    <li><div class="cy-top"><b>작업 카드 쓰기</b><span class="who">나</span></div><p>하고 싶은 것 한두 문장과 <strong>눈으로 확인할 수 있는</strong> 완료 기준 두세 개. 넣을 파일은 <a href="#map">파일 지도</a>에서 고릅니다.</p></li>
+    <li><div class="cy-top"><b>프롬프트 만들기</b><span class="who">도구</span></div><p><code>npm run ai:context -- …</code> → <code>frontend/.ai/prompt.md</code> 한 파일이 생깁니다.</p></li>
+    <li><div class="cy-top"><b>붙여 넣고 보내기</b><span class="who">나</span></div><p>VS Code로 <code>prompt.md</code>를 열고 <kbd>Ctrl+A</kbd> <kbd>Ctrl+C</kbd> → <strong>새 대화</strong>에 붙여 넣고 보냅니다.</p></li>
+    <li class="stop"><div class="cy-top"><b>계획 확인</b><span class="who ai">AI → 나</span></div><p>AI는 고칠 파일과 이유만 말하고 “진행할까요?”에서 멈춥니다. 파일 목록이 맞는지 보고 <strong>“진행”</strong>.</p></li>
+    <li><div class="cy-top"><b>파일 전체 받기</b><span class="who ai">AI</span></div><p>한 답변에 파일 하나, 전체가 옵니다. 파일이 더 있으면 붙여 넣은 뒤 <strong>“다음”</strong>.</p></li>
+    <li><div class="cy-top"><b>VS Code에 붙여 넣기</b><span class="who">나</span></div><p>그 파일을 열고 <kbd>Ctrl+A</kbd> <kbd>Ctrl+V</kbd> <kbd>Ctrl+S</kbd>. 새 파일이면 만들어서 붙입니다.</p></li>
+    <li><div class="cy-top"><b>점검</b><span class="who">도구</span></div><p><code>npm run ai:check</code> — 생략 흔적, 잘못 붙인 것, 타입 오류, ESLint를 봅니다.</p></li>
+    <li class="stop"><div class="cy-top"><b>눈으로 확인</b><span class="who">나</span></div><p><code>npm run dev</code>로 화면을 열고 완료 기준을 하나씩 직접 확인합니다.</p></li>
+    <li><div class="cy-top"><b>커밋</b><span class="who">나</span></div><p><code>git add 바꾼-파일</code> → <code>git commit -m "무엇을 했는지"</code>. 다음 작업은 새 대화에서.</p></li>
+  </ol>
+
+  <div class="loops">
+    <div class="note"><span class="tag">7에서 ❌</span><div><p>생략·붙여넣기 문제면 “생략 없이 파일 전체를 다시 줘” 또는 붙여 넣기를 다시 합니다. 타입·ESLint 오류면 <code>ai:check</code>가 알려 주는 <code>--type bugfix --error .ai/last-error.txt</code> 명령으로 2번부터 다시 합니다.</p></div></div>
+    <div class="note"><span class="tag">8에서 다름</span><div><p>오류는 없는데 화면이 기대와 다르면, 본 것(화면·콘솔·네트워크)을 <code>.ai/evidence.txt</code>에 그대로 적고 <code>--type bugfix --evidence .ai/evidence.txt</code>로 2번부터 다시 합니다.</p></div></div>
+  </div>
+
+  <div class="section">
+    <h3>한 바퀴를 대화로 보면</h3>
+    <p>실습 3(새로고침해야 바뀌는 문 센서)을 대화로 옮긴 예시입니다. 실제 문장은 서비스마다 다릅니다. 볼 것은 <strong>원인 → 계획 → “진행할까요?”</strong>의 순서와 <strong>고칠 파일 목록</strong>입니다.</p>
+    <div class="chat" aria-label="대화 예시">
+      <div class="msg me"><span class="from">나</span><span class="attach">prompt.md 전체 붙여 넣기 · 42,647자</span></div>
+      <div class="msg ai"><span class="from">AI · 예시</span>
+        <p><strong>원인</strong> — 경고 부저는 <code>device_state</code> 메시지로 오고, <code>useBoothData.ts</code>의 <code>handleWsMessage</code>가 처리해서 바로 바뀝니다. 문 센서 값은 증거에 있는 <code>sensor_reading</code> 메시지로 오는데, <code>handleWsMessage</code>에는 이 종류를 처리하는 곳이 없습니다. 그래서 새로고침으로 기기 목록을 다시 받을 때만 바뀝니다.</p>
+        <p><strong>계획</strong></p>
+        <ul>
+          <li>수정: <code>frontend/hooks/useBoothData.ts</code> — <code>sensor_reading</code>을 받으면 그 기기의 <code>current_state</code>를 <code>"reported"</code>, <code>current_value</code>를 받은 값으로 바꿉니다</li>
+          <li><code>VirtualBoothSimulator.tsx</code>는 고치지 않습니다 (이미 <code>current_value</code>를 읽고 있고, 큰 파일입니다)</li>
+        </ul>
+        <p>진행할까요?</p>
+      </div>
+      <div class="msg me"><span class="from">나</span><p>진행</p></div>
+      <div class="msg ai"><span class="from">AI · 예시</span>
+        <span class="file">### 파일: frontend/hooks/useBoothData.ts (수정)
+```tsx
+"use client";
+… (1번째 줄부터 281번째 줄까지 전체)
+```</span>
+        <p>확인 방법: <code>npm run ai:check</code> → <code>npm run dev</code> → <code>/admin</code>에서 문을 열고 닫아 새로고침 없이 바뀌는지 봅니다.</p>
+      </div>
+      <div class="msg me"><span class="from">나</span><p>(VS Code에 붙여 넣고 <code>ai:check</code> 통과, 화면 확인 끝) 고마워. 커밋할게.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 3 -->
+<section class="block" id="layers">
+  <div class="part-head">
+    <span class="no">03</span><h2>프롬프트 해부</h2>
+    <p class="sub"><code>ai:context</code>가 만드는 프롬프트는 여섯 층입니다. 실습 3의 실제 프롬프트(42,647자)를 층별로 나눠 봤습니다.</p>
+  </div>
+
+  <div class="stack" role="img" aria-label="실습 3 프롬프트의 층별 글자 수: 프로젝트 카드 5,818자, 규칙 원문 3,764자, 작업 카드 692자, 관련 파일 30,107자, 증거 1,151자, 답변 형식 1,003자">
+    <span class="l1" style="width:13.68%"></span><span class="l2" style="width:8.85%"></span><span class="l3" style="width:1.63%"></span><span class="l4" style="width:70.78%"></span><span class="l5" style="width:2.71%"></span><span class="l6" style="width:2.36%"></span>
+  </div>
+  <div class="stack-legend" aria-hidden="true">
+    <span><i class="sw l1"></i>카드</span><span><i class="sw l2"></i>규칙</span><span><i class="sw l3"></i>작업 카드</span><span><i class="sw l4"></i>관련 파일</span><span><i class="sw l5"></i>증거</span><span><i class="sw l6"></i>답변 형식</span>
+  </div>
+  <p>프롬프트의 70%가 파일입니다. 그래서 <strong>어떤 파일을 넣느냐</strong>가 가장 중요하고, 작업 카드는 짧아도 됩니다.</p>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>층</th><th>누가 채우나</th><th>실습 3</th><th>없으면 생기는 일</th></tr></thead>
+      <tbody>
+        <tr><td><span class="lyr"><i class="sw l1"></i>1 프로젝트 카드</span></td><td>도구 (<code>scripts/ai/context-card.md</code>)</td><td class="n">5,818자</td><td>스택·화면 4개·폴더·백엔드 API·WebSocket 종류·색 토큰을 모르니, 다른 프로젝트 문법(axios, 파랑 버튼, 없는 API)을 씁니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l2"></i>2 규칙 원문</span></td><td>도구 (<code>.agents/rules</code> 4개)</td><td class="n">3,764자</td><td>단순함·외과적 변경·UI 규칙·보안 규칙을 모르니 파일 전체를 새로 짜거나 엉뚱한 곳을 고칩니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l3"></i>3 작업 카드</span></td><td>나 (<code>--task</code>, <code>--done</code>) + 도구 (틀)</td><td class="n">692자</td><td>무엇이 “끝”인지 몰라 필요 없는 기능까지 덧붙입니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l4"></i>4 관련 파일 전체</span></td><td>나 (<code>--files</code>) + 도구 (<code>types</code> 자동, 큰 파일 표시, 비밀 가림)</td><td class="n">30,107자</td><td>지금 코드를 모르니 함수 이름·변수·화면 문구를 지어냅니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l5"></i>5 증거</span></td><td>나 (<code>--error</code>, <code>--evidence</code>, <code>--diff</code>)</td><td class="n">1,151자</td><td>원인을 짐작으로 찍고, 고친 뒤에도 같은 증상이 남습니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l6"></i>6 답변 형식</span></td><td>도구 (<code>templates/answer-format.md</code>)</td><td class="n">1,003자</td><td>계획 없이 코드부터, <code>// 기존 코드 동일</code> 같은 생략, 여러 파일을 한꺼번에 줍니다</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>파일 고르는 요령</h3>
+    <ul>
+      <li><strong>고칠 파일</strong>은 반드시 넣습니다. 새 파일을 만들 때는 그 파일을 불러 쓸 파일(예: 패널을 붙일 <code>app/admin/page.tsx</code>)을 넣습니다.</li>
+      <li>고칠 파일이 부르는 훅이나 유틸 중, <strong>동작을 알아야 하는 것</strong>만 더합니다. 실시간 반영 문제면 <code>hooks/useBoothData.ts</code>가 그렇습니다.</li>
+      <li><code>.ts</code>·<code>.tsx</code>를 넣으면 <code>types/index.ts</code>가 저절로 들어갑니다. 따로 적지 않습니다.</li>
+      <li>보통 <strong>1~3개</strong>면 충분합니다. “혹시 몰라서” 큰 파일을 넣으면 답이 흐려지고 길이 한도에 걸립니다. 도구는 60,000자가 넘으면 경고합니다.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h3>넣지 말 것</h3>
+    <div class="nos">
+      <span><code>.env</code>·키·PIN</span>
+      <span>실제 예약자 이름·전화번호</span>
+      <span><code>node_modules</code>·<code>.next</code></span>
+      <span>관련 없는 큰 파일</span>
+      <span>백엔드 코드 전체</span>
+      <span>지난 대화에서 받은 낡은 코드</span>
+    </div>
+  </div>
+
+  <div class="note"><span class="tag">카드 관리</span><div><p>화면·폴더·API가 바뀌면 프론트 담당이 <code>frontend/scripts/ai/context-card.md</code>를 직접 고칩니다. 카드가 틀리면 그 뒤의 모든 답이 틀립니다. 예를 들어 새 패널을 만들었으면 “폴더 지도”에 한 줄, 백엔드 담당이 새 API를 열었으면 “프론트가 부르는 API”에 한 줄을 더합니다.</p></div></div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 4 -->
+<section class="block" id="map">
+  <div class="part-head">
+    <span class="no">04</span><h2>기능 → 파일 지도</h2>
+    <p class="sub">고치고 싶은 것에서 출발해 <code>--files</code>에 넣을 파일을 고릅니다. 경로는 <code>frontend</code> 기준, 줄 수는 <code>karaoke</code> 브랜치 기준입니다.</p>
+  </div>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>고치고 싶은 것</th><th><code>--files</code>에 넣을 것</th><th class="num">줄</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="4">관리자 화면 /admin · 선생님 노트북</td></tr>
+        <tr><td class="k">기기 관제 카드 (상태 표시·제어 버튼)</td><td><div class="paths"><code>components/booth/VirtualBoothSimulator.tsx</code></div></td><td class="n">386</td><td>새로고침해야 바뀌면 <code>hooks/useBoothData.ts</code>도 함께</td></tr>
+        <tr><td class="k">맨 위 상태 타일</td><td><div class="paths"><code>components/admin/OpsSummary.tsx</code></div></td><td class="n">154</td><td></td></tr>
+        <tr><td class="k">자동 운영(스케줄러) 패널</td><td><div class="paths"><code>components/admin/SchedulerPanel.tsx</code></div></td><td class="n">257</td><td></td></tr>
+        <tr><td class="k">체험 대기열 관리</td><td><div class="paths"><code>components/admin/QueuePanel.tsx</code></div></td><td class="n">191</td><td></td></tr>
+        <tr><td class="k">교가 순위·CSV 내려받기</td><td><div class="paths"><code>components/admin/AnthemRankingPanel.tsx</code></div></td><td class="n">202</td><td></td></tr>
+        <tr><td class="k">영상 확인 패널</td><td><div class="paths"><code>components/booth/VideoCheckPanel.tsx</code></div></td><td class="n">305</td><td></td></tr>
+        <tr><td class="k">패널 순서·배치, 새 패널 붙이기</td><td><div class="paths"><code>app/admin/page.tsx</code></div></td><td class="n">230</td><td>새 패널은 새 파일 + 이 파일에 연결</td></tr>
+        <tr><td class="k">관리자 로그인</td><td><div class="paths"><code>components/booth/AdminGate.tsx</code><code>utils/adminSession.ts</code></div></td><td class="n">113<br>128</td><td>PIN 값은 코드에 없습니다 (백엔드 <code>.env</code>)</td></tr>
+
+        <tr class="group"><td colspan="4">부스 TV /booth · 어두운 무대 화면</td></tr>
+        <tr><td class="k">대기 화면 (키패드·QR·순위)</td><td><div class="paths"><code>components/booth/AttractScreen.tsx</code><code>components/booth/BoothKeypad.tsx</code></div></td><td class="n">369<br>302</td><td>2~3m 거리에서 읽히는 글자 크기</td></tr>
+        <tr><td class="k">맨 위 남은 시간 띠</td><td><div class="paths"><code>components/booth/SessionStrip.tsx</code><code>hooks/useBoothSession.ts</code></div></td><td class="n">103<br>61</td><td>실습 1</td></tr>
+        <tr><td class="k">노래방 화면 (곡 선택·재생·채점)</td><td><div class="paths"><code>components/booth/KaraokeRoomSection.tsx</code></div></td><td class="n">1,401</td><td><span class="big">큰 파일</span> 새 기능은 새 컴포넌트 파일로. 고쳐야 하면 나눠 받기</td></tr>
+        <tr><td class="k">안내 음성</td><td><div class="paths"><code>components/booth/BoothAudio.tsx</code></div></td><td class="n">182</td><td></td></tr>
+        <tr><td class="k">화면 배치</td><td><div class="paths"><code>app/booth/page.tsx</code></div></td><td class="n">82</td><td></td></tr>
+
+        <tr class="group"><td colspan="4">학생 폰 / · 예약</td></tr>
+        <tr><td class="k">첫 화면 배치·머리말</td><td><div class="paths"><code>app/page.tsx</code><code>components/layout/AppHeader.tsx</code></div></td><td class="n">85<br>96</td><td></td></tr>
+        <tr><td class="k">“지금 쓸 수 있나” 카드</td><td><div class="paths"><code>components/booth/BoothStatusCard.tsx</code></div></td><td class="n">125</td><td></td></tr>
+        <tr><td class="k">예약 폼·예약 목록</td><td><div class="paths"><code>components/booth/ReservationSection.tsx</code></div></td><td class="n">511</td><td><span class="big">큰 파일</span> 폼 칸 하나라도 새 작은 컴포넌트로 빼는 쪽을 먼저</td></tr>
+        <tr><td class="k">애창곡 기록 · 미니게임</td><td><div class="paths"><code>components/booth/SongHistorySection.tsx</code><code>components/booth/MiniGameSection.tsx</code></div></td><td class="n">129<br>199</td><td></td></tr>
+
+        <tr class="group"><td colspan="4">관람객 /try · QR로 접속</td></tr>
+        <tr><td class="k">체험권 받기·대기 순서</td><td><div class="paths"><code>app/try/page.tsx</code></div></td><td class="n">325</td><td>한 파일에 다 있습니다</td></tr>
+
+        <tr class="group"><td colspan="4">데이터·연결 (여러 화면 공통)</td></tr>
+        <tr><td class="k">실시간 반영 (WebSocket 메시지 처리), 공용 데이터</td><td><div class="paths"><code>hooks/useBoothData.ts</code></div></td><td class="n">274</td><td>실습 3. 메시지 종류는 프로젝트 카드에 있습니다</td></tr>
+        <tr><td class="k">서버 주소, 연결·재연결</td><td><div class="paths"><code>utils/apiConfig.ts</code><code>hooks/useKaraokeSocket.ts</code></div></td><td class="n">50<br>79</td><td></td></tr>
+        <tr><td class="k">공용 타입</td><td><div class="paths"><code>types/index.ts</code></div></td><td class="n">123</td><td>저절로 들어갑니다</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small">파일이 새로 생기거나 크게 바뀌면 이 표보다 <code>context-card.md</code>의 “폴더 지도”를 먼저 고칩니다. AI가 보는 것은 카드입니다.</p>
+</section>
+
+<!-- ═══════════════════════════════════════════ 5 -->
+<section class="block" id="tools">
+  <div class="part-head">
+    <span class="no">05</span><h2>도구 두 개</h2>
+    <p class="sub">둘 다 <code>frontend</code> 폴더에서 실행합니다. 새로 설치할 것은 없습니다 (Node와 git만 있으면 됩니다).</p>
+  </div>
+
+  <div class="section">
+    <h3><code>npm run ai:context</code> — 프롬프트 만들기</h3>
+    <div class="code"><span class="where">VS Code 터미널(Ctrl+`) · frontend 폴더</span>
+<pre>cd frontend
+npm run ai:context -- --type feature --task "대기열 패널에 예상 대기 시간을 보여 주고 싶어요" --done "대기 3명이면 '약 9분'이 보인다" --files components/admin/QueuePanel.tsx</pre></div>
+    <p><code>npm run ai:context</code> 바로 뒤의 <code>--</code>를 빼먹지 않습니다. 빠지면 npm이 옵션을 가져가 버립니다(도구가 알려 줍니다).</p>
+
+    <div class="tw">
+      <table class="wide">
+        <thead><tr><th>옵션</th><th>뜻</th><th>예</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>--type</code></td><td>틀 고르기: <code>feature</code> 기능 추가 · <code>bugfix</code> 오류 고치기 · <code>ui</code> 화면 다듬기 · <code>explain</code> 설명 받기. 안 쓰면 <code>feature</code></td><td><code>--type bugfix</code></td></tr>
+          <tr><td class="k"><code>--task</code></td><td>하고 싶은 것, 증상, 궁금한 점 (필수)</td><td><code>--task "예약 목록에 오늘 날짜를 굵게"</code></td></tr>
+          <tr><td class="k"><code>--task-file</code></td><td><code>--task</code> 대신 파일에서 읽기. 글이 길거나 큰따옴표·<code>$</code>가 들어갈 때</td><td><code>--task-file .ai/task.txt</code></td></tr>
+          <tr><td class="k"><code>--done</code></td><td>완료 기준. 여러 번 씁니다. 눈으로 확인할 수 있게</td><td><code>--done "375px 폭에서도 한 줄"</code></td></tr>
+          <tr><td class="k"><code>--files</code></td><td>넣을 파일 (frontend 기준 경로, 여러 개, 필수)</td><td><code>--files hooks/useBoothData.ts app/admin/page.tsx</code></td></tr>
+          <tr><td class="k"><code>--error</code></td><td>오류 메시지를 담은 파일</td><td><code>--error .ai/last-error.txt</code></td></tr>
+          <tr><td class="k"><code>--evidence</code></td><td>화면·콘솔·네트워크에서 본 것을 적은 파일</td><td><code>--evidence .ai/evidence.txt</code></td></tr>
+          <tr><td class="k"><code>--diff</code></td><td>커밋 뒤로 지금까지 바꾼 내용(git diff)도 넣기</td><td><code>--diff</code></td></tr>
+          <tr><td class="k"><code>--no-types</code></td><td><code>types/index.ts</code> 자동 포함 끄기 (길이를 줄일 때)</td><td></td></tr>
+          <tr><td class="k"><code>--out</code></td><td>저장 위치. 기본 <code>.ai/prompt.md</code></td><td></td></tr>
+          <tr><td class="k"><code>--help</code></td><td>사용법 보기</td><td><code>npm run ai:context -- --help</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>실습 3을 만들 때 실제로 나온 화면입니다.</p>
+<pre class="out"><span class="ok">✅ 프롬프트를 만들었습니다: frontend/.ai/prompt.md</span>
+   유형: bugfix · 글자 수 42,647 (토큰 약 17,059개, 어림)
+   넣은 파일:
+     - frontend/hooks/useBoothData.ts  274줄
+     - frontend/components/booth/VirtualBoothSimulator.tsx  432줄  <span class="key">⚠️ 큰 파일</span>
+     - frontend/types/index.ts  123줄
+   증거: .ai/evidence.txt
+
+다음 차례:
+  1) VS Code에서 위 파일을 열고 Ctrl+A → Ctrl+C
+  2) 대화창에 붙여 넣고 보내기 → AI가 먼저 '계획'을 말합니다
+  3) 계획이 맞으면 '진행' → 파일 전체를 받아 VS Code에 붙여 넣기 → npm run ai:check</pre>
+
+    <h4>도구가 막아 주는 것</h4>
+    <ul>
+      <li><code>.env</code>, <code>.env.local</code> 같은 비밀 파일은 넣지 않습니다. 키 이름만 필요하면 <code>.env.example</code>은 됩니다.</li>
+      <li><code>frontend</code> 밖의 파일(백엔드 등)은 넣지 않습니다. 프론트 담당은 프론트 파일만 넣습니다.</li>
+      <li>키·토큰처럼 생긴 글자는 <code>[가림]</code>으로 바꾸고 경고합니다.</li>
+      <li>60,000자가 넘으면 대화창이 잘라 먹을 수 있다고 경고합니다.</li>
+      <li>400줄이 넘는 파일에 “큰 파일” 표시를 달아, AI가 답변 형식 4번(새 파일로 빼기·나눠 주기)을 따르게 합니다.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h3>틀 네 가지 (<code>--type</code>)</h3>
+    <div class="tpls">
+      <div class="tpl"><span class="t">feature</span><h4>기능 추가</h4><p>하고 싶은 것 + 완료 기준. “붙인 파일 밖은 고치지 말 것, 새 패키지 금지, 없는 API는 백엔드 담당에게 부탁할 내용으로 따로” 가 붙습니다.</p></div>
+      <div class="tpl"><span class="t">bugfix</span><h4>오류 고치기</h4><p>증상 + 고쳐졌다고 볼 기준. <strong>원인을 먼저</strong> 설명하고 가장 작은 수정으로. <code>--error</code>나 <code>--evidence</code>를 꼭 함께 씁니다.</p></div>
+      <div class="tpl"><span class="t">ui</span><h4>화면 다듬기</h4><p>바꾸고 싶은 모양 + 기준. 색 토큰만, <code>lucide-react</code> 아이콘, 375px 폭, 키보드 포커스. <strong>기능 코드는 그대로</strong> 둡니다.</p></div>
+      <div class="tpl"><span class="t">explain</span><h4>설명 받기</h4><p>궁금한 점. 코드를 고치지 않고 <strong>줄 번호와 함께</strong> 설명만 받습니다. 남이 짠 파일을 처음 열 때 먼저 씁니다.</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3><code>npm run ai:check</code> — 붙여 넣은 뒤 점검</h3>
+    <p>코드를 고치지는 않습니다. <code>git</code>이 아는 마지막 커밋과 비교해 바뀐 파일을 살핍니다.</p>
+    <ul>
+      <li>바뀐 파일과 늘어난·지워진 줄 수. 생각보다 많이 지워졌으면 경고합니다 (AI가 빠뜨렸을 수 있음)</li>
+      <li><strong>생략 흔적</strong>: <code>// ...</code>, <code>{/* ... */}</code>, “기존 코드와 동일”, “나머지 그대로”, “생략”, <code>rest of the code</code></li>
+      <li><strong>잘못 붙인 것</strong>: 답변의 <code>```</code> 줄, <code>### 파일:</code> 머리말, 줄 번호(<code>  12| </code>)</li>
+      <li><strong>나눠 받은 조각</strong>: <code>(1/3)</code> <code>(2/3)</code> <code>(3/3)</code> 표시가 빠짐없이 순서대로 있는지</li>
+      <li><strong>타입 검사</strong>(tsc)와 <strong>ESLint</strong>. 오류는 <code>.ai/last-error.txt</code>에 저장하고, AI에게 물을 명령을 알려 줍니다</li>
+    </ul>
+    <div class="pair">
+      <div class="shot">
+        <span class="cap">통과 (실습 2 정답을 붙여 넣었을 때)</span>
+<pre class="out wrapped">🔎 AI 코드 붙여넣기 점검
+
+• frontend/components/booth/VirtualBoothSimulator.tsx (+48 −2)
+
+<span class="ok">✅ 타입 검사: 통과</span>
+<span class="ok">✅ ESLint: 통과</span>
+
+<span class="ok">✅ 문제를 찾지 못했습니다.</span>
+   이제 npm run dev 로 화면을 열어 완료 기준을 눈으로 확인하세요. 확인되면 커밋합니다.</pre>
+      </div>
+      <div class="shot">
+        <span class="cap">걸림 (AI가 덩어리 하나를 생략했을 때)</span>
+<pre class="out wrapped">🔎 AI 코드 붙여넣기 점검
+
+• frontend/components/booth/VirtualBoothSimulator.tsx (+1 −41)
+    <span class="bad">❌ 310번째 줄 — 주석이 '...'로 시작합니다: {/* ... 퇴실곡 미리 듣기 부분은 기존 코드와 동일 ... */}</span>
+    <span class="key">⚠️ 늘어난 줄보다 지워진 줄이 훨씬 많습니다. 파일 일부만 붙여 넣지 않았는지 확인하세요.</span>
+
+<span class="ok">✅ 타입 검사: 통과</span>
+<span class="key">⚠️ ESLint: 오류 0개, 경고 4개</span>
+
+<span class="bad">❌ 고칠 것이 있습니다. 위 ❌ 줄부터 해결하세요.</span>
+   생략·붙여넣기 문제는 AI에게 '생략 없이 파일 전체를 다시 달라'고 하거나, 붙여 넣기를 다시 하세요.</pre>
+      </div>
+    </div>
+    <div class="note"><span class="tag">타입 검사 통과</span><div><p>오른쪽 예처럼 생략돼도 타입 검사는 통과할 수 있습니다. 화면 한 덩어리가 통째로 사라졌는데도요. 그래서 <code>ai:check</code>의 ❌·⚠️ 줄과 8번 “눈으로 확인”이 둘 다 필요합니다.</p></div></div>
+  </div>
+
+  <div class="section">
+    <h3>PowerShell에서 주의할 것</h3>
+    <ul>
+      <li>옵션이 무시된다는 메시지가 나오면, npm 없이 직접 실행합니다: <code>node scripts/ai/context.mjs --type feature --task "…" --files …</code> (일부 PowerShell은 <code>--</code>를 지워 버립니다)</li>
+      <li>글에 큰따옴표(<code>"</code>)나 <code>$</code>가 들어가면 PowerShell이 글을 바꿉니다. <code>frontend/.ai/task.txt</code>에 적고 <code>--task-file .ai/task.txt</code>로 씁니다.</li>
+      <li>경로는 <code>components\booth\X.tsx</code>처럼 역슬래시로 써도 됩니다.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 6 -->
+<section class="block" id="pledge">
+  <div class="part-head">
+    <span class="no">06</span><h2>답변 형식 약속</h2>
+    <p class="sub">모든 프롬프트 맨 끝에 붙는 여섯 가지입니다. 우리는 코드를 <strong>파일 전체를 지우고 붙여 넣는</strong> 방식으로 반영하기 때문에 이 약속이 필요합니다.</p>
+  </div>
+
+  <ol class="pledge">
+    <li><b>먼저 계획만 말하고 “진행할까요?”에서 멈춘다</b><span class="why">고칠 파일·새 파일 목록과 이유를 코드 없이 봅니다. 엉뚱한 파일을 고치려는 것을 코드 400줄을 받기 전에 잡습니다.</span><span class="if">어기면: <q>계획만 다시 말해 줘. 코드는 아직 쓰지 마.</q></span></li>
+    <li><b>코드는 한 답변에 파일 하나, 첫 줄부터 마지막 줄까지</b><span class="why">“3번째 함수 아래에 이걸 넣어”식 조각은 초보자가 넣을 자리를 틀리기 쉽습니다. 파일 전체면 <kbd>Ctrl+A</kbd> <kbd>Ctrl+V</kbd> 하나로 끝납니다.</span><span class="if">어기면: <q>바꾼 부분만 말고 이 파일 전체를 줘.</q></span></li>
+    <li><b>절대 생략하지 않는다</b><span class="why"><code>// 기존 코드 동일</code>을 그대로 붙여 넣으면 그 자리의 코드가 사라집니다. 바꾸지 않은 줄도, 주석도 그대로 다시 써야 합니다.</span><span class="if">어기면: <q>생략 없이 이 파일 전체를 첫 줄부터 마지막 줄까지 다시 줘.</q></span></li>
+    <li><b>400줄이 넘는 파일은 새 작은 파일로 빼고, 그래도 고치면 나눠서 준다</b><span class="why">긴 파일은 답이 끊기거나 생략되기 쉽습니다. 나눌 때는 <code>// ===== 여기까지 (1/3) — 다음 조각에 이어짐 =====</code> 표시를 붙이고, JSX 안이 아닌 곳에서만 나눕니다.</span><span class="if">어기면: <q>이 파일은 400줄이 넘어. 새 작은 컴포넌트 파일로 빼는 방법으로 다시 계획해 줘.</q></span></li>
+    <li><b>붙인 파일에 없는 함수·API·패키지를 지어내지 않는다</b><span class="why">없는 API를 부르면 화면은 뜨는데 404가 납니다. 필요한 정보가 없으면 묻게 하고, 백엔드가 필요하면 “백엔드 담당에게 부탁할 내용”으로 따로 받습니다.</span><span class="if">어기면: <q>붙여 준 파일에 없는 함수나 API는 쓰지 말고, 있는 것만으로 다시 계획해 줘.</q></span></li>
+    <li><b>마지막에 확인 방법을 적는다</b><span class="why">실행할 명령과 화면에서 볼 것. 완료 기준과 맞는지 내가 비교합니다.</span><span class="if">어기면: <q>어떻게 확인하면 되는지 명령과 화면에서 볼 것을 알려 줘.</q></span></li>
+  </ol>
+</section>
+
+<!-- ═══════════════════════════════════════════ 7 -->
+<section class="block" id="vscode">
+  <div class="part-head">
+    <span class="no">07</span><h2>VS Code에 붙여 넣기</h2>
+    <p class="sub">도구 없이 손으로 반영합니다. 다섯 가지만 익히면 됩니다.</p>
+  </div>
+
+  <div class="howto">
+    <div class="ht">
+      <h4>파일 전체 바꾸기</h4>
+      <ol>
+        <li>대화창 코드 블록의 <strong>복사 버튼</strong>을 누릅니다 (블록 안만 복사됩니다)</li>
+        <li>VS Code에서 그 파일을 엽니다. <kbd>Ctrl+P</kbd> 후 파일 이름을 치면 빠릅니다</li>
+        <li><kbd>Ctrl+A</kbd> → <kbd>Ctrl+V</kbd> → <kbd>Ctrl+S</kbd></li>
+        <li><code>npm run ai:check</code></li>
+      </ol>
+      <span class="warnline"><code>### 파일:</code> 줄과 <code>```</code> 줄은 복사하지 않습니다</span>
+    </div>
+    <div class="ht">
+      <h4>새 파일 만들기</h4>
+      <ol>
+        <li>탐색기에서 폴더(예: <code>components/admin</code>)를 오른쪽 클릭 → <strong>새 파일</strong></li>
+        <li>답변 머리말의 이름을 <strong>대소문자까지</strong> 그대로 씁니다 (<code>QueueEta.tsx</code>)</li>
+        <li>붙여 넣고 저장합니다</li>
+        <li>새 파일은 누군가 불러 써야 화면에 나옵니다. 계획에 “연결할 파일”도 있었는지 봅니다</li>
+      </ol>
+    </div>
+    <div class="ht">
+      <h4>나눠 받은 파일 이어 붙이기</h4>
+      <ol>
+        <li><code>(1/3)</code>을 받아 파일에 <kbd>Ctrl+A</kbd> → <kbd>Ctrl+V</kbd></li>
+        <li>“다음” → <code>(2/3)</code>을 받으면 <kbd>Ctrl+End</kbd>로 맨 끝 → <kbd>Enter</kbd> → <kbd>Ctrl+V</kbd></li>
+        <li><code>(3/3)</code>까지 같은 방법. 저장 → <code>npm run ai:check</code></li>
+        <li>점검이 알려 주는 조각 표시 줄 번호를 찾아 그 줄들을 지우고 다시 점검합니다</li>
+      </ol>
+<pre class="out wrapped"><span class="key">⚠️ 나눠 받은 조각 3개가 순서대로 다 붙었습니다. 확인이 끝나면 조각 표시 줄(340, 720, 1404번째 줄)을 지우세요.</span></pre>
+    </div>
+    <div class="ht">
+      <h4>바뀐 곳 보기</h4>
+      <ol>
+        <li><kbd>Ctrl+Shift+G</kbd> 소스 제어 → 바뀐 파일을 누릅니다</li>
+        <li>왼쪽이 원래, 오른쪽이 지금입니다. <strong>빨강</strong>은 지운 줄, <strong>초록</strong>은 더한 줄</li>
+        <li>계획에 없던 빨강이 길게 있으면 AI가 코드를 빠뜨린 것입니다</li>
+      </ol>
+    </div>
+    <div class="ht">
+      <h4>되돌리기</h4>
+      <ol>
+        <li>저장 전이면 <kbd>Ctrl+Z</kbd></li>
+        <li>저장 뒤면 소스 제어에서 파일을 오른쪽 클릭 → <strong>변경 내용 취소</strong>(Discard Changes)</li>
+        <li>터미널이라면 <code>git checkout -- components/admin/QueuePanel.tsx</code></li>
+      </ol>
+      <span class="warnline">되돌린 내용은 다시 살릴 수 없습니다. 잘 된 부분은 먼저 커밋해 둡니다</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 8 -->
+<section class="block" id="chat">
+  <div class="part-head">
+    <span class="no">08</span><h2>대화 관리</h2>
+    <p class="sub">AI는 대화가 길어질수록 앞에서 준 규칙과 답변 형식을 잊습니다.</p>
+  </div>
+
+  <ul>
+    <li><strong>작업 하나에 새 대화 하나.</strong> 지난 작업의 코드가 지금 파일과 섞이지 않게 합니다.</li>
+    <li>같은 대화에서는 짧은 후속(“진행”, “다음”, 오류 붙이기)까지만 합니다. 파일을 붙여 넣은 뒤 새로 크게 물을 때는 <strong>최신 파일로 프롬프트를 다시 만듭니다</strong>. AI는 내가 붙여 넣은 뒤의 파일을 모릅니다. 지금까지 바꾼 것을 알려 주려면 <code>--diff</code>.</li>
+    <li>생략이 나오기 시작하거나, 색 토큰·한국어 문구 같은 규칙을 어기기 시작하면 대화가 길어졌다는 신호입니다. 새 대화로 옮깁니다.</li>
+    <li>답이 중간에 끊기면 “이어서”보다 나눠서 처음부터 다시 받는 쪽이 안전합니다. 이어 쓴 답은 어디서부터 이어졌는지 틀리기 쉽습니다.</li>
+    <li>같은 질문에 답이 매번 조금씩 다른 것은 정상입니다. 그래서 계획 단계에서 방향을 정하고 갑니다.</li>
+  </ul>
+
+  <div class="section">
+    <h3>보낼 말 모음</h3>
+    <div class="phrases">
+      <div class="phrase"><span><span class="when">계획이 맞을 때</span><span class="text">진행</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">파일 하나를 붙여 넣은 뒤</span><span class="text">다음</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">생략이 보일 때</span><span class="text">생략 없이 이 파일 전체를 첫 줄부터 마지막 줄까지 다시 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">코드부터 줄 때</span><span class="text">계획만 다시 말해 줘. 코드는 아직 쓰지 마.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">없는 함수·API를 쓸 때</span><span class="text">붙여 준 파일에 없는 함수나 API는 쓰지 말고, 있는 것만으로 다시 계획해 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">큰 파일을 고치려 할 때</span><span class="text">이 파일은 400줄이 넘어. 새 작은 컴포넌트 파일로 빼는 방법으로 다시 계획해 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">답이 끊겼을 때</span><span class="text">답이 끊겼어. 그 파일을 (1/2), (2/2)로 나눠서 처음부터 다시 줘. 조각 끝에는 약속한 표시를 붙여 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">붙여 넣은 뒤 오류가 날 때 (아래에 오류를 붙인다)</span><span class="text">붙여 넣었더니 아래 오류가 나. 원인부터 설명하고, 고칠 파일 전체를 다시 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">다른 곳까지 바뀌었을 때</span><span class="text">계획에 없던 곳까지 바뀌었어. 계획에 적은 부분만 바꾼 파일 전체를 다시 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 9 -->
+<section class="block" id="service">
+  <div class="part-head">
+    <span class="no">09</span><h2>서비스마다 다른 점</h2>
+    <p class="sub">서비스 이름 대신 “이럴 때는 이렇게”로 정리했습니다. 어떤 서비스든 기본은 <code>prompt.md</code> 한 파일을 붙여 넣는 것입니다.</p>
+  </div>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>이럴 때</th><th>이렇게</th></tr></thead>
+      <tbody>
+        <tr><td class="k">긴 글을 붙이면 “첨부 파일”로 바뀐다</td><td>그대로 보내도 됩니다. AI가 끝까지 읽었는지는 첫 답이 <strong>계획</strong>인지로 확인합니다 (답변 형식은 맨 끝에 있습니다).</td></tr>
+        <tr><td class="k">파일을 올릴 수 있다</td><td><code>.ai/prompt.md</code> 하나만 올립니다. 저장소 파일을 낱개로 여러 개 올리지 않습니다. 층과 순서가 깨지고 규칙이 빠집니다.</td></tr>
+        <tr><td class="k">글이 너무 길다며 거절한다</td><td>꼭 고칠 파일만 남기고, <code>--no-types</code>를 붙이고, 설명은 파일 하나씩 받습니다. 도구가 보여 주는 글자 수를 봅니다.</td></tr>
+        <tr><td class="k">답이 중간에 끊긴다</td><td>큰 파일을 나눠 받습니다 (보낼 말 “답이 끊겼어 …”).</td></tr>
+        <tr><td class="k">코드 블록에 복사 버튼이 있다</td><td>버튼으로 복사합니다. 머리말이나 <code>```</code> 줄이 딸려 오지 않습니다.</td></tr>
+        <tr><td class="k">“캔버스”, “코드 실행” 같은 기능을 권한다</td><td>쓰지 않아도 됩니다. 실행과 확인은 우리 PC에서 <code>npm run dev</code>로 합니다.</td></tr>
+        <tr><td class="k">대화가 저장되거나 학습에 쓰일 수 있다</td><td>비밀과 개인정보를 넣지 않는 원칙을 그대로 지킵니다. 학교 계정 설정은 선생님과 확인합니다.</td></tr>
+        <tr><td class="k">하루 사용 한도가 있다</td><td>계획 단계에서 충분히 확인해 헛된 왕복을 줄입니다. 설명만 필요하면 <code>explain</code>으로 짧게 묻습니다.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 10 -->
+<section class="block" id="trouble">
+  <div class="part-head">
+    <span class="no">10</span><h2>자주 겪는 문제</h2>
+    <p class="sub">대부분 컨텍스트가 모자라거나, 붙여 넣기가 어긋난 경우입니다.</p>
+  </div>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>증상</th><th>왜</th><th>이렇게</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>ai:check</code>가 <code>❌ 주석이 '...'로 시작합니다</code></td><td>AI가 코드를 줄여 썼습니다</td><td>보낼 말 “생략 없이 …”. 되풀이되면 새 대화</td></tr>
+        <tr><td class="k"><code>Invalid character</code> 오류가 100개 넘게</td><td><code>### 파일:</code>이나 <code>```</code> 줄까지 붙여 넣었습니다</td><td>그 줄을 지우거나 복사 버튼으로 다시 붙여 넣기</td></tr>
+        <tr><td class="k"><code>Cannot find name '…'</code></td><td>없는 함수를 썼거나, 이름을 틀렸거나, 다른 파일에 있어야 할 것을 빠뜨렸습니다</td><td><code>ai:check</code>가 알려 주는 <code>--type bugfix --error .ai/last-error.txt</code> 명령으로 다시 묻기</td></tr>
+        <tr><td class="k">화면은 뜨는데 Network 탭에 404</td><td>AI가 없는 API를 지어냈습니다</td><td>프로젝트 카드의 API 목록에 있는지 확인. 없으면 백엔드 담당에게 부탁</td></tr>
+        <tr><td class="k">소스 제어에 계획에 없던 빨강이 길다</td><td>AI가 다른 부분을 빠뜨렸거나 새로 짰습니다</td><td>변경 내용 취소 → 보낼 말 “계획에 없던 곳까지 …”</td></tr>
+        <tr><td class="k"><code>useState</code>를 쓰는 컴포넌트에서 “client component” 오류</td><td>새 파일 맨 위에 <code>"use client";</code>가 없습니다</td><td>첫 줄에 <code>"use client";</code> (이 프로젝트의 모든 화면이 그렇습니다)</td></tr>
+        <tr><td class="k">색이 안 나온다 (빌드 뒤에만)</td><td><code>bg-${color}</code>처럼 클래스 이름을 조합했습니다</td><td>완성된 클래스 이름을 조건으로 고르게 다시 부탁</td></tr>
+        <tr><td class="k">파랑·회색이 다른 화면과 안 어울린다</td><td><code>blue-500</code>, <code>slate-800</code> 같은 기본 색을 썼습니다</td><td>토큰(<code>brass</code>, <code>ink-2</code>, <code>surface</code> …)으로 바꿔 달라고 하기</td></tr>
+        <tr><td class="k">ESLint <code>react-hooks/set-state-in-effect</code></td><td><code>useEffect</code> 안에서 바로 상태를 바꿨습니다</td><td>첫 호출을 <code>setTimeout(fn, 0)</code>으로 감싸는 기존 방식으로 (카드의 “알려진 함정”)</td></tr>
+        <tr><td class="k"><code>LayoutProps</code>를 찾을 수 없다</td><td>새로 받은 저장소에 Next가 만드는 타입이 아직 없습니다</td><td><code>ai:check</code>가 저절로 <code>next typegen</code>을 돌립니다. 손으로는 <code>npx next typegen</code></td></tr>
+        <tr><td class="k">고쳤는데 화면이 그대로다</td><td>저장을 안 했거나, 다른 파일을 고쳤거나, 개발 서버가 멈췄습니다</td><td><kbd>Ctrl+S</kbd> → <code>ai:check</code>의 바뀐 파일 목록 확인 → 새로고침 → <code>npm run dev</code> 다시</td></tr>
+        <tr><td class="k">문 센서처럼 새로고침해야 바뀐다</td><td>그 WebSocket 메시지 종류를 처리하지 않습니다</td><td>Network → WS → Messages를 증거로 <code>hooks/useBoothData.ts</code>와 함께 묻기 (실습 3)</td></tr>
+        <tr><td class="k">AI가 백엔드를 고치라고 한다</td><td>프론트만으로 안 되는 일입니다</td><td>코드를 받지 말고 “백엔드 담당에게 부탁할 내용”으로 정리해 전달</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 11 -->
+<section class="block" id="practice">
+  <div class="part-head">
+    <span class="no">11</span><h2>실습과 점검표</h2>
+    <p class="sub">세 실습은 실제로 만든 프롬프트, 실제 백엔드에서 받은 증거, 정답 패치와 함께 <a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4%EB%A7%81-%ED%94%84%EB%A1%A0%ED%8A%B8/README.md">실습 폴더</a>에 있습니다.</p>
+  </div>
+
+  <div class="labs">
+    <div class="lab">
+      <div class="t"><span>실습 1 · explain · 15분</span></div>
+      <h4>설명 받기: 남은 시간은 어떻게 줄어드나</h4>
+      <p>같은 질문을 아무것도 붙이지 않고 한 번, <code>ai:context</code> 프롬프트로 한 번 물어 답을 비교합니다.</p>
+      <dl><dt>파일</dt><dd><code>hooks/useBoothSession.ts</code> <code>components/booth/SessionStrip.tsx</code></dd><dt>길이</dt><dd>20,791자</dd></dl>
+    </div>
+    <div class="lab">
+      <div class="t"><span>실습 2 · feature · 40분</span></div>
+      <h4>기능 추가: 관리자 화면에 문 센서·부저</h4>
+      <p>계획 확인 → 파일 전체 받기 → 붙여 넣기 → <code>ai:check</code> → 눈으로 확인 → 커밋. 일부러 틀려 보며 점검기가 무엇을 잡는지도 봅니다.</p>
+      <dl><dt>파일</dt><dd><code>components/booth/VirtualBoothSimulator.tsx</code></dd><dt>길이</dt><dd>31,075자</dd></dl>
+    </div>
+    <div class="lab">
+      <div class="t"><span>실습 3 · bugfix · 30분</span></div>
+      <h4>오류 고치기: 새로고침해야 바뀌는 문 센서</h4>
+      <p>오류 메시지가 없는 버그입니다. 화면에서 본 것과 WebSocket 메시지를 증거로 모아 묻습니다.</p>
+      <dl><dt>파일</dt><dd><code>hooks/useBoothData.ts</code> <code>components/booth/VirtualBoothSimulator.tsx</code></dd><dt>길이</dt><dd>42,647자</dd></dl>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>점검표</h3>
+    <p class="small">체크한 것은 이 브라우저에만 남습니다. 작업이 끝나면 지우고 다음 작업에 다시 씁니다.</p>
+    <div class="checks">
+      <div class="check">
+        <h4>보내기 전</h4>
+        <label><input type="checkbox" id="c-s1"><span>완료 기준이 눈으로 확인할 수 있는 문장이다</span></label>
+        <label><input type="checkbox" id="c-s2"><span>고칠 파일이 <code>--files</code>에 들어갔고, 관련 없는 큰 파일은 뺐다</span></label>
+        <label><input type="checkbox" id="c-s3"><span>오류나 증상이면 <code>--error</code>나 <code>--evidence</code>를 붙였다</span></label>
+        <label><input type="checkbox" id="c-s4"><span>도구가 “큰 파일”·글자 수 경고를 냈는지 봤다</span></label>
+        <label><input type="checkbox" id="c-s5"><span><code>prompt.md</code>에 비밀·개인정보가 없다</span></label>
+        <label><input type="checkbox" id="c-s6"><span>새 대화에 붙여 넣었다</span></label>
+      </div>
+      <div class="check">
+        <h4>답을 받은 뒤</h4>
+        <label><input type="checkbox" id="c-r1"><span>첫 답이 코드 없는 계획이었다</span></label>
+        <label><input type="checkbox" id="c-r2"><span>고칠 파일 목록이 내가 붙인 파일 안에 있다 (백엔드 수정 없음)</span></label>
+        <label><input type="checkbox" id="c-r3"><span>400줄 넘는 파일은 새 파일로 빼거나 나눠 받았다</span></label>
+        <label><input type="checkbox" id="c-r4"><span>코드 블록 안만 복사해 파일 전체를 바꿨다</span></label>
+        <label><input type="checkbox" id="c-r5"><span><code>npm run ai:check</code>에 ❌가 없다</span></label>
+        <label><input type="checkbox" id="c-r6"><span>소스 제어에서 계획에 없던 빨강이 없다</span></label>
+      </div>
+      <div class="check">
+        <h4>커밋 전</h4>
+        <label><input type="checkbox" id="c-c1"><span><code>npm run dev</code>에서 완료 기준을 하나씩 눈으로 확인했다</span></label>
+        <label><input type="checkbox" id="c-c2"><span>폰 폭(375px)과 어두운 부스 화면에서도 깨지지 않는다</span></label>
+        <label><input type="checkbox" id="c-c3"><span>색은 토큰, 아이콘은 <code>lucide-react</code>, 문구는 한국어 존댓말이다</span></label>
+        <label><input type="checkbox" id="c-c4"><span>새 파일·새 API가 생겼으면 <code>context-card.md</code>를 고쳤다</span></label>
+        <label><input type="checkbox" id="c-c5"><span>바꾼 파일만 <code>git add</code> 했다 (<code>.ai/</code>는 커밋되지 않는다)</span></label>
+      </div>
+    </div>
+    <div class="row"><button type="button" class="reset" id="reset-checks">체크 모두 지우기</button></div>
+  </div>
+</section>
+
+<footer>
+  <span>함께 볼 것</span>
+  <ul>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4%EB%A7%81-%ED%94%84%EB%A1%A0%ED%8A%B8/README.md">실습 — 대화창 AI로 프론트엔드 작업하기</a> · 실습 3개, 실제 프롬프트, 증거 견본</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/tree/karaoke/frontend/scripts/ai">frontend/scripts/ai</a> · 도구 두 개, 프로젝트 카드, 틀 네 가지, 답변 형식</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EB%AC%B8%EC%84%BC%EC%84%9C-%EB%B6%80%EC%A0%80/README.md">문 열림 센서 + 경고 부저 실습</a> · 같은 기능을 영상으로, 정답 패치</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EB%B6%80%EB%A1%9DH-%EB%B0%B1%EC%97%94%EB%93%9C-%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-DB-%EA%B5%AC%EC%A1%B0-%EC%84%A4%EB%AA%85%EC%84%9C.html">부록H 구조 설명서</a> · <code>desired_state</code>와 <code>current_state</code>, 버튼 한 번이 도어락까지 가는 길</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EB%B6%80%EB%A1%9DJ-%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%ED%99%94%EB%A9%B4%EB%B6%84%EB%A6%AC-%EB%B0%8F-UIUX-%EA%B0%9C%EC%84%A0-%EB%A7%A4%EB%89%B4%EC%96%BC.html">부록J 화면 분리와 UI/UX</a> · 화면 4개의 역할과 UI 원칙</li>
+  </ul>
+  <span>본편 06 · 웹 예약 연동 자동화 학교 노래방 부스 관리 시스템 · 인천전자마이스터고</span>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var PREFIX = "ctxManual:";
+  function load(key) { try { return localStorage.getItem(PREFIX + key); } catch (e) { return null; } }
+  function save(key, value) {
+    try { if (value === null) localStorage.removeItem(PREFIX + key); else localStorage.setItem(PREFIX + key, value); } catch (e) {}
+  }
+
+  // 클릭 안에서 복사하고, 막혀 있으면 글자를 선택해 Ctrl+C를 안내한다
+  function copyText(text, node, btn, label) {
+    function done(msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = label; }, 1600); }
+    function fallback() {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      done("선택됨 · Ctrl+C");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("복사됨"); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  // ── 명령 복사 ──
+  var blocks = document.querySelectorAll(".code pre");
+  Array.prototype.forEach.call(blocks, function (pre) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy";
+    btn.textContent = "복사";
+    btn.setAttribute("aria-label", "이 명령 복사");
+    btn.addEventListener("click", function () { copyText(pre.innerText.replace(/\n$/, ""), pre, btn, "복사"); });
+    pre.parentNode.appendChild(btn);
+  });
+
+  // ── 보낼 말 복사 ──
+  var chips = document.querySelectorAll(".phrase .chip-copy");
+  Array.prototype.forEach.call(chips, function (btn) {
+    var text = btn.parentNode.querySelector(".text");
+    btn.setAttribute("aria-label", "“" + text.textContent + "” 복사");
+    btn.addEventListener("click", function () { copyText(text.textContent, text, btn, "복사"); });
+  });
+
+  // ── 점검표 (이 브라우저에만) ──
+  var boxes = document.querySelectorAll(".check input[type=checkbox]");
+  Array.prototype.forEach.call(boxes, function (box) {
+    box.checked = load("check:" + box.id) === "1";
+    box.addEventListener("change", function () { save("check:" + box.id, box.checked ? "1" : null); });
+  });
+  var reset = document.getElementById("reset-checks");
+  if (reset) reset.addEventListener("click", function () {
+    Array.prototype.forEach.call(boxes, function (box) { box.checked = false; save("check:" + box.id, null); });
+  });
+})();
+</script>

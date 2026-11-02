@@ -25,6 +25,14 @@ const TYPES = ["feature", "bugfix", "ui", "explain"];
 
 // ── 옵션 읽기 ──────────────────────────────────────────────────────────────
 function parseArgs(argv) {
+  // 'npm run ai:context' 뒤에 '--'를 빠뜨리면(또는 PowerShell이 '--'를 지우면) npm이 옵션을 가져가 버린다.
+  // 그때 npm은 npm_config_type 같은 환경 변수만 남기므로, 그것을 보고 원인을 바로 알려 준다.
+  if (["type", "task", "files", "done", "error", "evidence"].some((k) => process.env[`npm_config_${k}`])) {
+    fail("npm이 옵션(--type, --task, --files …)을 가져가 버렸습니다.\n" +
+      "   'npm run ai:context' 바로 뒤에 '--'를 꼭 쓰세요:  npm run ai:context -- --type feature --task \"…\" --files …\n" +
+      "   PowerShell에서 '--'를 썼는데도 이 메시지가 나오면 npm 없이 직접 실행하세요:\n" +
+      "   node scripts/ai/context.mjs --type feature --task \"…\" --files …");
+  }
   const o = { type: "feature", task: "", done: [], files: [], diff: false, types: true, out: ".ai/prompt.md" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
