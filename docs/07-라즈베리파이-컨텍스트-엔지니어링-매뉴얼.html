@@ -1,0 +1,954 @@
+<meta charset="utf-8">
+<title>라즈베리파이 컨텍스트 엔지니어링</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<style>
+  /* 레이아웃: 파이 담당이 작업하며 옆에 띄워 두는 한 줄 문서. 위에 붙는 목차 → 왜 → 어디서(PC·GitHub·파이) → 한 바퀴
+     → 프롬프트 해부 → 파일 지도 → 도구 → 답변 형식 → 붙여넣기·옮기기 → 대화 관리 → 문제 대처 → 실습·점검표.
+     색은 04·05·06 매뉴얼과 같은 제품 팔레트 — 밝은 테마 = `/`·`/admin`의 낮 팔레트, 어두운 테마 = `/booth`의 무대 팔레트 */
+  :root {
+    --canvas:#F1F3F1; --surface:#FFFFFF; --raised:#F6F7F5;
+    --line:#E3E6E2; --line-strong:#C9CDC6;
+    --ink:#15181A; --ink-2:#51565B; --ink-3:#868C90;
+    --brass:#7A5510; --brass-soft:#F7EFDE; --on-brass:#FFFFFF;
+    --live:#A92B22; --live-soft:#FBEBE9;
+    --free:#116B4E; --free-soft:#E4F2EC;
+    --term:#16181B; --term-line:#2A2D31; --term-ink:#E6E8E4; --term-dim:#8D948F; --term-key:#E9BC5E; --term-ok:#5FD3A2; --term-bad:#FF7A6B;
+    --display:"Black Han Sans", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+    --sans:"Noto Sans KR", system-ui, -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    --mono:"JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --canvas:#0B0A0D; --surface:#141318; --raised:#1D1B22;
+      --line:#2A2830; --line-strong:#3C3946;
+      --ink:#F3F1F5; --ink-2:#B3AEBD; --ink-3:#7D7889;
+      --brass:#E9BC5E; --brass-soft:#2B2214; --on-brass:#17130A;
+      --live:#FF6150; --live-soft:#2C1513;
+      --free:#4FDCA6; --free-soft:#0E2B22;
+      --term:#1D1B22; --term-line:#3C3946; --term-ink:#F3F1F5; --term-dim:#7D7889; --term-key:#E9BC5E; --term-ok:#4FDCA6; --term-bad:#FF6150;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --canvas:#0B0A0D; --surface:#141318; --raised:#1D1B22;
+    --line:#2A2830; --line-strong:#3C3946;
+    --ink:#F3F1F5; --ink-2:#B3AEBD; --ink-3:#7D7889;
+    --brass:#E9BC5E; --brass-soft:#2B2214; --on-brass:#17130A;
+    --live:#FF6150; --live-soft:#2C1513;
+    --free:#4FDCA6; --free-soft:#0E2B22;
+    --term:#1D1B22; --term-line:#3C3946; --term-ink:#F3F1F5; --term-dim:#7D7889; --term-key:#E9BC5E; --term-ok:#4FDCA6; --term-bad:#FF6150;
+    color-scheme: dark;
+  }
+
+  html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 64px); }
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.72; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 20; background: var(--canvas); }
+  .wrap {
+    --gut: max(16px, min(4vw, 32px));
+    max-width: 960px; margin: 0 auto; padding-block: 0 96px;
+    padding-left: max(var(--gut), env(safe-area-inset-left, 0px));
+    padding-right: max(var(--gut), env(safe-area-inset-right, 0px));
+  }
+  h1, h2, h3, h4 { margin: 0; line-height: 1.3; text-wrap: balance; }
+  p { margin: 0; }
+  a { color: var(--brass); text-underline-offset: 3px; }
+  strong { color: var(--ink); font-weight: 700; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--raised); border: 1px solid var(--line); padding: .05em .38em; border-radius: 5px; color: var(--ink); overflow-wrap: anywhere; }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
+  kbd { font-family: var(--mono); font-size: .8em; font-weight: 700; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-bottom-width: 2px; padding: .05em .42em; border-radius: 6px; white-space: nowrap; }
+
+  /* ── 표지 ─────────────────────────────────────────── */
+  .cover { padding-block: 56px 28px; display: flex; flex-direction: column; gap: 16px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .12em; color: var(--brass); }
+  .cover h1 { font-family: var(--display); font-weight: 400; font-size: clamp(34px, 6.4vw, 58px); line-height: 1.08; letter-spacing: -.01em; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: var(--ink-3); }
+  .meta b { color: var(--ink-2); font-weight: 700; margin-right: 6px; }
+  .golden { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 6px; }
+  .golden div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; }
+  .golden .n { font-family: var(--display); font-size: 26px; color: var(--brass); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .golden .d { font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+
+  /* ── 위에 붙는 목차 ───────────────────────────────── */
+  .toc { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--canvas); border-block: 1px solid var(--line);
+         margin-left: calc(-1 * max(var(--gut), env(safe-area-inset-left, 0px))); margin-right: calc(-1 * max(var(--gut), env(safe-area-inset-right, 0px)));
+         padding-left: max(var(--gut), env(safe-area-inset-left, 0px)); padding-right: max(var(--gut), env(safe-area-inset-right, 0px)); }
+  .toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: row; gap: 2px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .toc a { display: inline-block; padding: 11px 10px; font-size: 13.5px; font-weight: 700; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent; }
+  .toc a:hover { color: var(--ink); border-bottom-color: var(--brass); }
+
+  /* ── 큰 구획 ──────────────────────────────────────── */
+  .block { padding-top: 64px; display: flex; flex-direction: column; gap: 18px; }
+  .part-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 2px solid var(--ink); }
+  .part-head .no { font-family: var(--display); font-size: clamp(34px, 6vw, 50px); color: var(--brass); line-height: 1; font-variant-numeric: tabular-nums; }
+  .part-head h2 { font-size: clamp(23px, 3.6vw, 29px); font-weight: 800; letter-spacing: -.01em; }
+  .part-head .sub { flex-basis: 100%; color: var(--ink-2); font-size: 15px; }
+  h3 { font-size: 19px; font-weight: 800; letter-spacing: -.01em; }
+  h4 { font-size: 15px; font-weight: 800; }
+  .section { display: flex; flex-direction: column; gap: 14px; padding-top: 30px; }
+  .section > p, li { color: var(--ink-2); }
+  ol, ul { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+
+  /* ── 표 ───────────────────────────────────────────── */
+  .tw { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
+  th { text-align: left; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--ink-3); padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+  tr:last-child td { border-bottom: none; }
+  td.k { color: var(--ink); font-weight: 700; }
+  th.num { text-align: right; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-3); text-align: right; }
+  .wide { min-width: 760px; }
+  tr.group td { background: var(--raised); font-size: 12px; font-weight: 800; letter-spacing: .04em; color: var(--ink-3); padding-block: 7px; }
+  td code { white-space: nowrap; overflow-wrap: normal; }
+  .paths { display: flex; flex-direction: column; gap: 3px; }
+  .paths code { background: transparent; border: none; padding: 0; color: var(--ink); font-size: 13px; }
+  .big { font-family: var(--sans); font-size: 11px; font-weight: 800; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 45%, transparent); border-radius: 999px; padding: 0 7px; margin-left: 6px; white-space: nowrap; }
+
+  /* ── 알림 상자 ────────────────────────────────────── */
+  .note { display: flex; gap: 12px; align-items: flex-start; padding: 13px 15px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+  .tag { flex: none; font-size: 11.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px; margin-top: 2px; background: var(--surface); color: var(--ink-2); border: 1px solid var(--line-strong); }
+  .note.warn { background: var(--live-soft); border-color: color-mix(in srgb, var(--live) 30%, transparent); }
+  .note.warn .tag { background: var(--live); color: var(--canvas); border-color: transparent; }
+  .note.ok { background: var(--free-soft); border-color: color-mix(in srgb, var(--free) 30%, transparent); }
+  .note.ok .tag { background: var(--free); color: var(--canvas); border-color: transparent; }
+  .note > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+  /* ── 명령 상자 · 터미널 출력 ──────────────────────── */
+  .code { position: relative; min-width: 0; }
+  .code .where { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-bottom: 6px; }
+  .code pre, .out { margin: 0; background: var(--term); color: var(--term-ink); border: 1px solid var(--term-line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; }
+  .code pre { padding-right: 64px; }
+  .code pre .c, .out .c { color: var(--term-dim); }
+  .out .ok { color: var(--term-ok); }
+  .out .bad { color: var(--term-bad); }
+  .out .key { color: var(--term-key); }
+  .out.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .shot { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .copy { position: absolute; right: 8px; bottom: 8px; font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--term-dim); background: transparent; border: 1px solid var(--term-line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .copy:hover { color: var(--term-ink); border-color: var(--term-dim); }
+  .cap { font-size: 12.5px; color: var(--ink-3); }
+
+  /* ── 비교 두 칸 ───────────────────────────────────── */
+  .duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+  .duo > div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .duo .lbl { font-size: 12px; font-weight: 800; letter-spacing: .04em; color: var(--ink-3); }
+  .duo .ours { border-color: color-mix(in srgb, var(--brass) 55%, transparent); }
+  .duo .ours .lbl { color: var(--brass); }
+  .duo ul { font-size: 14px; gap: 4px; }
+
+  /* ── 한 바퀴 ──────────────────────────────────────── */
+  .cycle { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; counter-reset: cy; }
+  .cycle li { counter-increment: cy; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--ink-2); font-size: 14px; }
+  .cycle li.stop { border-color: color-mix(in srgb, var(--brass) 60%, transparent); background: var(--brass-soft); }
+  .cy-top { display: flex; align-items: center; gap: 9px; }
+  .cy-top::before { content: counter(cy); width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--brass); color: var(--on-brass); display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 13px; }
+  .cy-top b { color: var(--ink); font-size: 15px; }
+  .who { margin-left: auto; font-size: 11px; font-weight: 800; color: var(--ink-2); background: var(--raised); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
+  .who.ai { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, transparent); }
+  .loops { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+
+  /* ── 대화 예시 ────────────────────────────────────── */
+  .chat { background: var(--raised); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: min(560px, 92%); border-radius: 14px; padding: 11px 14px; font-size: 14px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .msg .from { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--ink-3); }
+  .msg.me { align-self: flex-end; background: var(--brass-soft); border: 1px solid color-mix(in srgb, var(--brass) 35%, transparent); color: var(--ink); }
+  .msg.ai { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); color: var(--ink-2); }
+  .msg ul { font-size: 14px; gap: 3px; }
+  .msg .file { font-family: var(--mono); font-size: 12.5px; background: var(--term); color: var(--term-ink); border-radius: 8px; padding: 9px 11px; overflow-x: auto; white-space: pre; }
+  .msg .attach { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12.5px; background: var(--surface); border: 1px dashed var(--line-strong); border-radius: 8px; padding: 6px 10px; color: var(--ink-2); }
+
+  /* ── 프롬프트 해부 ────────────────────────────────── */
+  .stack { display: flex; height: 44px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface); }
+  .stack span { display: block; height: 100%; min-width: 3px; border-right: 2px solid var(--surface); }
+  .stack span:last-child { border-right: none; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 7px; flex: none; }
+  .l1 { background: var(--ink-2); } .l2 { background: var(--ink-3); } .l3 { background: var(--free); }
+  .l4 { background: var(--brass); } .l5 { background: var(--live); } .l6 { background: var(--line-strong); }
+  .stack-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink-3); }
+  .stack-legend span { display: inline-flex; align-items: center; }
+  td .lyr { display: flex; align-items: center; color: var(--ink); font-weight: 700; white-space: nowrap; }
+  .nos { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nos span { font-size: 13.5px; font-weight: 700; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 10px; }
+  .nos span::before { content: "×"; color: var(--live); font-weight: 800; margin-right: 6px; }
+
+  /* ── 틀 4종 ───────────────────────────────────────── */
+  .tpls { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .tpl { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 15px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .tpl .t { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--brass); }
+  .tpl h4 { font-size: 16px; }
+  .tpl p { font-size: 13.5px; color: var(--ink-2); }
+
+  /* ── 답변 형식 약속 ───────────────────────────────── */
+  .pledge { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0; counter-reset: pl; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  .pledge > li { counter-increment: pl; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 14px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+  .pledge > li:last-child { border-bottom: none; }
+  .pledge > li::before { content: counter(pl); grid-row: span 3; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--brass); color: var(--brass); display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 13px; }
+  .pledge b { color: var(--ink); font-size: 15px; }
+  .pledge .why { font-size: 14px; color: var(--ink-2); }
+  .pledge .if { font-size: 13.5px; color: var(--ink-3); }
+  .pledge .if q { color: var(--ink); quotes: "“" "”"; }
+
+  /* ── VS Code 요령 ─────────────────────────────────── */
+  .howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .ht { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .ht h4 { font-size: 16px; }
+  .ht ol { font-size: 14px; gap: 5px; }
+  .ht .warnline { font-size: 13px; color: var(--live); font-weight: 700; }
+
+  /* ── 보낼 말 ──────────────────────────────────────── */
+  .phrases { display: flex; flex-direction: column; gap: 8px; }
+  .phrase { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px 9px 14px; }
+  .phrase .when { display: block; font-size: 12px; font-weight: 700; color: var(--ink-3); }
+  .phrase .text { display: block; color: var(--ink); font-weight: 500; font-size: 14.5px; }
+  .chip-copy { font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: var(--brass); background: var(--brass-soft); border: 1px solid color-mix(in srgb, var(--brass) 40%, transparent); border-radius: 8px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  .chip-copy:hover { border-color: var(--brass); }
+
+  /* ── 실습 카드 ────────────────────────────────────── */
+  .labs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .lab { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .lab .t { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .lab .t span { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--brass); }
+  .lab h4 { font-size: 16.5px; }
+  .lab p { font-size: 14px; color: var(--ink-2); }
+  .lab dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; font-size: 13px; }
+  .lab dt { color: var(--ink-3); font-weight: 700; }
+  .lab dd { margin: 0; color: var(--ink-2); min-width: 0; }
+
+  /* ── 체크리스트 ───────────────────────────────────── */
+  .checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+  .check { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .check h4 { padding: 12px 15px; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .check label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 15px; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--ink-2); cursor: pointer; }
+  .check label:last-child { border-bottom: none; }
+  .check input { margin-top: 5px; width: 15px; height: 15px; flex: none; accent-color: var(--brass); }
+  .check input:checked + span { color: var(--ink-3); text-decoration: line-through; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .reset { font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .small { font-size: 13px; color: var(--ink-3); }
+
+  footer { margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-3); display: flex; flex-direction: column; gap: 10px; }
+  footer ul { padding-left: 18px; gap: 4px; }
+
+  @media (max-width: 560px) {
+    .pledge > li { grid-template-columns: 1fr; }
+    .pledge > li::before { grid-row: auto; }
+    .phrase { grid-template-columns: 1fr; }
+    .phrase .chip-copy { justify-self: start; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+  /* ── PC → GitHub → 파이 ───────────────────────────── */
+  .lanes { display: grid; grid-template-columns: minmax(0, 1.2fr) auto minmax(0, 0.8fr) auto minmax(0, 1.2fr); gap: 10px; align-items: stretch; }
+  .lane { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .lane.pi { border-color: color-mix(in srgb, var(--brass) 55%, transparent); }
+  .lane.hub { background: var(--raised); }
+  .lane-t { font-size: 12px; font-weight: 800; letter-spacing: .04em; color: var(--ink-3); }
+  .lane.pi .lane-t { color: var(--brass); }
+  .lane ul { font-size: 13.5px; gap: 4px; }
+  .lanes .arrow { align-self: center; font-family: var(--mono); font-weight: 700; font-size: 20px; color: var(--ink-3); }
+  /* 열 걸음은 세 칸 줄에서 10번이 혼자 남는다 — 마지막 걸음(실기기)을 한 줄 전체로 */
+  @media (min-width: 840px) { .cycle li:last-child { grid-column: 1 / -1; } }
+  @media (max-width: 760px) {
+    .lanes { grid-template-columns: 1fr; }
+    .lanes .arrow { justify-self: center; transform: rotate(90deg); }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="cover">
+  <div class="eyebrow">본편 07 · 라즈베리파이 담당 · 대화창 AI</div>
+  <h1>대화창 AI로<br>라즈베리파이 만들기</h1>
+  <p class="lede">AI 에이전트 없이, 웹 대화창 AI와 VS Code만으로 노래방 부스의 라즈베리파이 데몬에 부품을 더하고 오류를 고치는 방법입니다. 대화창 AI는 우리 파일도, 책상 위의 배선도 볼 수 없습니다. 그래서 코드·핀 배치·배선·오류를 골라 한 번에 넣어 주는 일, 곧 <strong>컨텍스트 엔지니어링</strong>이 작업의 중심입니다. 그 일을 파이썬 도구 두 개가 돕습니다.</p>
+  <div class="meta">
+    <span><b>대상</b>라즈베리파이(하드웨어) 담당 학생 · 지도 교사</span>
+    <span><b>기준</b><code>karaoke</code> 브랜치 · <code>pi/scripts/ai</code></span>
+    <span><b>AI 서비스</b>어떤 것이든 (복사·붙여넣기 기준)</span>
+  </div>
+  <div class="golden" aria-label="외워 둘 것">
+    <div><span class="n">배선표 먼저</span><span class="d">새 부품은 코드보다 배선표를 먼저 받고, 핀이 겹치지 않는지 내가 확인합니다</span></div>
+    <div><span class="n">가짜 핀 먼저</span><span class="d">AI가 준 코드는 PC에서 가짜 핀(mock)으로 돌려 본 뒤에 실기기로 옮깁니다</span></div>
+    <div><span class="n">파일 1개</span><span class="d">한 답변에 파일 하나, 전체. 505줄 <code>main.py</code>는 (1/2)·(2/2)로 나눠 받습니다</span></div>
+    <div><span class="n">선생님과</span><span class="d">배선은 전원을 뽑고. 실기기 첫 연결과 220V는 선생님 입회 아래에서만</span></div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ul>
+    <li><a href="#why">왜 이 방식</a></li>
+    <li><a href="#where">어디서 하나</a></li>
+    <li><a href="#cycle">한 바퀴</a></li>
+    <li><a href="#layers">프롬프트 해부</a></li>
+    <li><a href="#map">파일 지도</a></li>
+    <li><a href="#tools">도구</a></li>
+    <li><a href="#pledge">답변 형식</a></li>
+    <li><a href="#vscode">붙여넣기·옮기기</a></li>
+    <li><a href="#chat">대화 관리</a></li>
+    <li><a href="#trouble">문제 대처</a></li>
+    <li><a href="#practice">실습·점검</a></li>
+  </ul>
+</nav>
+
+<!-- ═══════════════════════════════════════════ 1 -->
+<section class="block" id="why">
+  <div class="part-head">
+    <span class="no">01</span><h2>왜 이 방식인가</h2>
+    <p class="sub">대화창 AI가 아는 것은 내가 붙여 넣은 글뿐입니다. 라즈베리파이는 여기에 <strong>배선</strong>과 <strong>안전</strong>이 더해집니다.</p>
+  </div>
+
+  <div class="duo">
+    <div>
+      <span class="lbl">아무것도 붙이지 않고 물으면</span>
+      <ul>
+        <li>라즈베리파이 5에서 동작하지 않는 <code>RPi.GPIO</code> 예제를 줍니다</li>
+        <li>이미 도어락이 쓰는 GPIO17에 새 부품을 꽂으라고 합니다</li>
+        <li>파이에 Flask 서버를 띄우는 등 우리 구조(파이가 묻는 폴링)와 다른 방식을 씁니다</li>
+        <li>없는 API 주소와 기기 이름을 지어냅니다</li>
+      </ul>
+    </div>
+    <div class="ours">
+      <span class="lbl"><code>context.py</code>로 만든 프롬프트로 물으면</span>
+      <ul>
+        <li>gpiozero·lgpio, 비어 있는 핀, 백엔드와의 약속이 <strong>프로젝트 카드</strong>로 들어갑니다</li>
+        <li><code>main.py</code>와 <code>booth_pins.py</code> <strong>원문</strong>이 들어가 기존 구조대로 고칩니다</li>
+        <li>하드웨어 규칙(전원 끄고 배선, 가짜 핀 먼저, 안전 상태)이 함께 들어갑니다</li>
+        <li>답은 계획부터, 파일 전체로, 생략 없이 옵니다</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>AI는 우리 저장소뿐 아니라 <strong>책상 위의 보드도 볼 수 없습니다.</strong> 어떤 부품을 어느 핀에 꽂았는지, 저항을 달았는지, 부품이 실제로 무엇을 했는지는 내가 글로 적어 줘야 압니다. AI가 준 코드는 도어락과 220V 릴레이를 움직이므로, 실기기에 올리기 전에 PC에서 가짜 핀으로 먼저 돌려 봅니다. 이 문서는 그 순서를 도구와 함께 정리했습니다. 프론트엔드 담당용 06 매뉴얼과 같은 방식이고, 파이에 맞게 도구와 규칙이 다릅니다.</p>
+
+  <div class="note warn"><span class="tag">안전</span><div><p>배선은 <strong>파이 전원을 뽑은 상태</strong>에서만 바꿉니다. 실기기 첫 연결과 220V 연결은 <strong>선생님 입회</strong> 아래, 배선 자가진단이 통과한 뒤에 합니다. 솔레노이드 도어락은 12V 별도 전원을 쓰고, 파이의 5V 핀에서 끌어오지 않습니다. AI의 답이 이와 다르면 AI가 틀린 것입니다.</p></div></div>
+  <div class="note warn"><span class="tag">비밀</span><div><p><code>pi/.env</code>, <code>DEVICE_API_KEY</code>, Wi-Fi 비밀번호, 파이 로그인 비밀번호는 대화창에 넣지 않습니다. <code>context.py</code>는 <code>.env</code> 파일을 거부하고 키처럼 생긴 글자를 <code>[가림]</code>으로 바꿉니다. 오류 글 속 경로의 컴퓨터 사용자 이름도 <code>~</code>로 바꿉니다.</p></div></div>
+  <div class="note"><span class="tag">나이</span><div><p>AI 서비스마다 쓸 수 있는 나이와 조건이 다릅니다. 쓰기 전에 선생님과 함께 학교 지침과 서비스 이용 조건을 확인합니다. <code>AGENTS.md</code>의 “역할 지정 + rules/skills 참고” 문구는 파일을 직접 읽는 에이전트용이고, 대화창에서는 이 문서의 도구가 규칙 원문을 넣어 줍니다.</p></div></div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 2 -->
+<section class="block" id="where">
+  <div class="part-head">
+    <span class="no">02</span><h2>어디서 고치고, 어디서 돌리나</h2>
+    <p class="sub">코드는 PC에서 고치고 가짜 핀으로 확인합니다. 확인된 코드만 git으로 라즈베리파이에 옮깁니다.</p>
+  </div>
+
+  <div class="lanes" role="img" aria-label="PC에서 고치고 가짜 핀으로 확인한 뒤 GitHub를 거쳐 라즈베리파이에서 git pull 하고 실기기로 확인하는 흐름">
+    <div class="lane">
+      <span class="lane-t">PC (Windows)</span>
+      <ul>
+        <li>대화창 AI · VS Code</li>
+        <li><code>context.py</code> → 붙여넣기 → <code>check.py</code></li>
+        <li>가짜 핀으로 <code>main.py</code> 실행, 관리자 화면 확인</li>
+        <li><code>git commit</code> → <code>git push</code></li>
+      </ul>
+    </div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="lane hub">
+      <span class="lane-t">GitHub</span>
+      <ul>
+        <li>팀 저장소의 작업 가지</li>
+        <li>“가짜 핀에서 확인된 코드”만 올라옵니다</li>
+      </ul>
+    </div>
+    <span class="arrow" aria-hidden="true">→</span>
+    <div class="lane pi">
+      <span class="lane-t">라즈베리파이 5</span>
+      <ul>
+        <li>PC에서 <code>ssh</code>로 접속</li>
+        <li><code>git pull</code> → 전원 뽑고 배선 → 선생님 확인</li>
+        <li><code>python test_hardware_gpio.py</code> → <code>python main.py</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>왜 PC에서 고치나</h3>
+    <ul>
+      <li>대화창 AI, VS Code, 복사·붙여넣기가 모두 PC에 있습니다. SSH 창의 <code>nano</code>에 수백 줄을 붙여 넣으면 들여쓰기가 깨지기 쉽습니다.</li>
+      <li>하드웨어 규칙 3번 “실기기 전에 Mock으로 먼저”를 PC에서 지킬 수 있습니다. gpiozero의 가짜 핀(mock)은 Windows에서도 돕니다.</li>
+      <li>git을 거치면 파이에 무엇이 들어갔는지 기록이 남고, 잘못되면 되돌릴 수 있습니다.</li>
+    </ul>
+    <div class="code"><span class="where">PC PowerShell · 처음 한 번 (pi 폴더)</span>
+<pre>cd pi
+python -m venv venv
+venv\Scripts\activate
+pip install gpiozero requests python-dotenv
+copy .env.example .env</pre></div>
+    <p class="small">PC의 <code>pi/.env</code>에는 <code>BACKEND_URL=http://127.0.0.1:8000</code>(백엔드가 같은 PC일 때)과 <code>backend/.env</code>와 같은 <code>DEVICE_API_KEY</code>를 넣습니다. 파이의 가상환경은 <a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EB%B6%80%EB%A1%9DI-%EB%9D%BC%EC%A6%88%EB%B2%A0%EB%A6%AC%ED%8C%8C%EC%9D%B45-%EC%8B%A4%EA%B8%B0%EA%B8%B0-%EB%A7%88%EC%9D%B4%EA%B7%B8%EB%A0%88%EC%9D%B4%EC%85%98-%EB%A7%A4%EB%89%B4%EC%96%BC.html">부록I</a>대로 <code>--system-site-packages</code>로 만듭니다.</p>
+  </div>
+
+  <div class="note"><span class="tag">다른 방법</span><div><p>VS Code의 <strong>Remote - SSH</strong> 확장을 쓰면 PC의 VS Code에서 파이의 파일을 바로 열어 붙여 넣을 수 있습니다. 이때 <code>check.py</code>와 가짜 핀 실행은 파이의 터미널에서 합니다 (<code>GPIOZERO_PIN_FACTORY=mock python main.py</code>). 어느 방법이든 “붙여 넣기 → 점검 → 가짜 핀 → 실기기” 순서는 같습니다.</p></div></div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 3 -->
+<section class="block" id="cycle">
+  <div class="part-head">
+    <span class="no">03</span><h2>작업 한 바퀴</h2>
+    <p class="sub">열 걸음입니다. 색칠한 4번(계획 확인), 8번(가짜 핀으로 확인), 10번(선생님과 실기기)은 건너뛰지 않습니다.</p>
+  </div>
+
+  <ol class="cycle">
+    <li><div class="cy-top"><b>작업 카드 쓰기</b><span class="who">나</span></div><p>하고 싶은 것과 눈으로 확인할 완료 기준. 새 부품이면 <code>--type wiring</code>으로 <strong>배선표부터</strong> 받습니다.</p></li>
+    <li><div class="cy-top"><b>프롬프트 만들기</b><span class="who">도구</span></div><p><code>python scripts/ai/context.py …</code> → <code>pi/.ai/prompt.md</code>. 파이썬 파일을 넣으면 <code>booth_pins.py</code>가 함께 들어갑니다.</p></li>
+    <li><div class="cy-top"><b>붙여 넣고 보내기</b><span class="who">나</span></div><p>VS Code로 <code>prompt.md</code>를 열고 <kbd>Ctrl+A</kbd> <kbd>Ctrl+C</kbd> → <strong>새 대화</strong>에 붙여 넣고 보냅니다.</p></li>
+    <li class="stop"><div class="cy-top"><b>계획 확인</b><span class="who ai">AI → 나</span></div><p>고칠 파일, 배선표, 안전 상태 처리를 봅니다. 핀이 겹치지 않고 <code>RPi.GPIO</code>가 없으면 <strong>“진행”</strong>.</p></li>
+    <li><div class="cy-top"><b>파일 전체 받기</b><span class="who ai">AI</span></div><p>한 답변에 파일 하나. <code>main.py</code>처럼 큰 파일은 <code>(1/2)</code> <code>(2/2)</code>로 옵니다. 붙여 넣은 뒤 <strong>“다음”</strong>.</p></li>
+    <li><div class="cy-top"><b>VS Code에 붙여 넣기</b><span class="who">나</span></div><p>그 파일을 열고 <kbd>Ctrl+A</kbd> <kbd>Ctrl+V</kbd> <kbd>Ctrl+S</kbd>. 조각은 맨 끝에 이어 붙입니다.</p></li>
+    <li><div class="cy-top"><b>점검</b><span class="who">도구</span></div><p><code>python scripts/ai/check.py</code> — 생략, 들여쓰기, 이름 오타, 핀 겹침, 가짜 핀으로 부품 만들어 보기.</p></li>
+    <li class="stop"><div class="cy-top"><b>가짜 핀으로 확인</b><span class="who">나</span></div><p>백엔드를 켜고 가짜 핀으로 <code>main.py</code>를 돌려 터미널 출력과 관리자 화면을 봅니다.</p></li>
+    <li><div class="cy-top"><b>커밋·파이로 옮기기</b><span class="who">나</span></div><p><code>pi</code> 파일만 <code>git add</code> → 커밋 → <code>git push</code> → 파이에서 <code>git pull</code>.</p></li>
+    <li class="stop"><div class="cy-top"><b>실기기 확인</b><span class="who">나 + 선생님</span></div><p>전원을 뽑고 배선 → 선생님 확인 → <code>test_hardware_gpio.py</code> → <code>main.py</code>. 부품이 한 일을 눈으로 봅니다.</p></li>
+  </ol>
+
+  <div class="loops">
+    <div class="note"><span class="tag">7에서 ❌</span><div><p>생략·붙여넣기면 “생략 없이 파일 전체를 다시 줘”. 문법·이름·가짜 핀 오류면 <code>check.py</code>가 알려 주는 <code>--type bugfix --error .ai/last-error.txt</code> 명령으로 2번부터.</p></div></div>
+    <div class="note"><span class="tag">8·10에서 다름</span><div><p>오류는 없는데 부품이 다르게 움직이면, 터미널 출력과 <strong>부품이 실제로 한 일, 실제 배선</strong>을 <code>.ai/evidence.txt</code>에 적고 <code>--type bugfix --evidence .ai/evidence.txt</code>로 2번부터.</p></div></div>
+  </div>
+
+  <div class="section">
+    <h3>한 바퀴를 대화로 보면</h3>
+    <p>실습 4(외부 풀업 저항을 달았더니 시동 오류)를 대화로 옮긴 예시입니다. 실제 문장은 서비스마다 다릅니다. 볼 것은 <strong>원인 → 계획 → “진행할까요?”</strong> 순서, 원인이 코드인지 배선인지 가르는지, 그리고 <strong>고칠 곳의 크기</strong>입니다.</p>
+    <div class="chat" aria-label="대화 예시">
+      <div class="msg me"><span class="from">나</span><span class="attach">prompt.md 전체 붙여 넣기 · 36,399자</span></div>
+      <div class="msg ai"><span class="from">AI · 예시</span>
+        <p><strong>원인</strong> — <code>pull_up=None</code>은 파이가 풀업도 풀다운도 하지 않는다는 뜻이라, 핀이 ‘떠 있음’으로 정의됩니다. 이때는 LOW와 HIGH 중 어느 쪽이 ‘눌림’인지 gpiozero가 알 수 없어서 <code>active_state</code>를 꼭 정해야 합니다. 말씀하신 배선(3.3V — 10kΩ — GPIO23, 스위치 — GND)은 풀업이라, 문이 닫혀 스위치가 닫히면 LOW입니다.</p>
+        <p><strong>계획</strong></p>
+        <ul>
+          <li>수정: <code>pi/main.py</code> — <code>Button(…)</code>에 <code>active_state=False</code>만 더합니다 (LOW = 눌림 = 문 닫힘). <code>door_is_open()</code>과 보고 값은 그대로</li>
+          <li>배선 확인: 저항의 한쪽이 5V가 아니라 <strong>3.3V(1번 핀)</strong>에 붙었는지 봐 주세요</li>
+          <li><code>main.py</code>는 565줄이라 <code>(1/2)</code>, <code>(2/2)</code>로 나눠 드립니다</li>
+        </ul>
+        <p>진행할까요?</p>
+      </div>
+      <div class="msg me"><span class="from">나</span><p>진행</p></div>
+      <div class="msg ai"><span class="from">AI · 예시</span>
+        <span class="file">### 파일: pi/main.py (수정) (1/2)
+```python
+"""
+… (1번째 줄부터 BoothHardware 클래스 끝까지 전체)
+# ===== 여기까지 (1/2) — 다음 조각에 이어짐 =====
+```</span>
+      </div>
+      <div class="msg me"><span class="from">나</span><p>다음</p></div>
+      <div class="msg ai"><span class="from">AI · 예시</span><span class="file">### 파일: pi/main.py (수정) (2/2)
+```python
+… (BackendClient 부터 마지막 줄까지 전체)
+# ===== 파일 끝 (2/2) =====
+```</span><p>확인: 조각 표시 두 줄을 지우고 <code>python scripts/ai/check.py</code> → <code>python mock_door.py</code>에서 <code>o</code>는 ‘열림’, <code>c</code>는 ‘닫힘’으로 보고되는지 보세요.</p></div>
+      <div class="msg me"><span class="from">나</span><p>(이어 붙이고 표시 줄을 지운 뒤 <code>check.py</code> 통과, 가짜 핀 확인 끝) 고마워. 커밋할게.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 4 -->
+<section class="block" id="layers">
+  <div class="part-head">
+    <span class="no">04</span><h2>프롬프트 해부</h2>
+    <p class="sub"><code>context.py</code>가 만드는 프롬프트는 여섯 층입니다. 실습 4의 실제 프롬프트(36,399자)를 층별로 나눠 봤습니다.</p>
+  </div>
+
+  <div class="stack" role="img" aria-label="실습 4 프롬프트의 층별 글자 수: 프로젝트 카드 6,693자, 규칙 원문 3,027자, 작업 카드 863자, 관련 파일 23,319자, 증거 1,143자, 답변 형식 1,243자">
+    <span class="l1" style="width:18.44%"></span><span class="l2" style="width:8.34%"></span><span class="l3" style="width:2.38%"></span><span class="l4" style="width:64.26%"></span><span class="l5" style="width:3.15%"></span><span class="l6" style="width:3.43%"></span>
+  </div>
+  <div class="stack-legend" aria-hidden="true">
+    <span><i class="sw l1"></i>카드</span><span><i class="sw l2"></i>규칙</span><span><i class="sw l3"></i>작업 카드</span><span><i class="sw l4"></i>관련 파일</span><span><i class="sw l5"></i>증거</span><span><i class="sw l6"></i>답변 형식</span>
+  </div>
+  <p>파일이 64%이고, 프로젝트 카드가 프론트엔드보다 큽니다(18%). 핀 배치표, 비어 있는 핀, 백엔드와의 약속, 안전 규칙처럼 <strong>코드만 봐서는 모르는 것</strong>이 카드에 들어 있기 때문입니다.</p>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>층</th><th>누가 채우나</th><th class="num">실습 4</th><th>없으면 생기는 일</th></tr></thead>
+      <tbody>
+        <tr><td><span class="lyr"><i class="sw l1"></i>1 프로젝트 카드</span></td><td>도구 (<code>scripts/ai/context-card.md</code>)</td><td class="n">6,693자</td><td>Pi 5에서 안 도는 <code>RPi.GPIO</code>, 이미 쓰는 핀, 파이에 서버 띄우기, 없는 API 주소</td></tr>
+        <tr><td><span class="lyr"><i class="sw l2"></i>2 규칙 원문</span></td><td>도구 (<code>.agents/rules</code> 4개)</td><td class="n">3,027자</td><td>가짜 핀 먼저·전원 끄고 배선·비밀 값은 .env 같은 원칙을 모릅니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l3"></i>3 작업 카드</span></td><td>나 (<code>--task</code>, <code>--done</code>) + 도구 (틀)</td><td class="n">863자</td><td>무엇이 “끝”인지, 실제 배선이 어떤지 모릅니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l4"></i>4 관련 파일 전체</span></td><td>나 (<code>--files</code>) + 도구 (<code>booth_pins.py</code> 자동, 큰 파일 표시, 비밀 가림)</td><td class="n">23,319자</td><td>메서드 이름·보고 방식·출력 문구를 지어내고, 기존 구조와 다르게 짭니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l5"></i>5 증거</span></td><td>나 (<code>--error</code>, <code>--evidence</code>, <code>--diff</code>)</td><td class="n">1,143자</td><td>원인을 짐작으로 찍습니다. 코드 탓인지 배선 탓인지 가르지 못합니다</td></tr>
+        <tr><td><span class="lyr"><i class="sw l6"></i>6 답변 형식</span></td><td>도구 (<code>templates/answer-format.md</code>)</td><td class="n">1,243자</td><td>계획 없이 코드부터, 생략, 탭 들여쓰기, 505줄 파일이 중간에 끊김</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>배선도 컨텍스트입니다</h3>
+    <p>AI는 보드를 볼 수 없으므로 아래를 <code>--task</code>나 증거 파일에 글로 적습니다. 실습 4의 과제 글에 배선을 적은 이유입니다.</p>
+    <ul>
+      <li>부품의 <strong>모델명</strong>과 모듈에 적힌 <strong>핀 이름</strong> (예: MC-38 리드 스위치, 부저 모듈 VCC·GND·S)</li>
+      <li>실제로 꽂은 <strong>물리 핀 번호</strong>와 BCM 번호, 저항 값과 위치, 전원 전압(3.3V·5V·12V)</li>
+      <li>부품이 <strong>실제로 한 일</strong> (예: “문을 닫았는데 터미널에 ‘문이 열렸습니다’가 찍혔다”, “릴레이 LED는 켜지는데 딸깍 소리가 없다”)</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h3>넣지 말 것</h3>
+    <div class="nos">
+      <span><code>pi/.env</code>·장치 키</span>
+      <span>Wi-Fi·파이 로그인 비밀번호</span>
+      <span><code>venv</code>·<code>__pycache__</code></span>
+      <span>관련 없는 스크립트</span>
+      <span>백엔드 코드 전체</span>
+      <span>지난 대화에서 받은 낡은 코드</span>
+    </div>
+  </div>
+
+  <div class="note"><span class="tag">카드 관리</span><div><p>핀을 새로 쓰거나 파일·API가 바뀌면 파이 담당이 <code>pi/scripts/ai/context-card.md</code>의 핀 배치표와 “비어 있는 BCM”을 직접 고칩니다. 카드가 틀리면 AI가 이미 쓰는 핀을 비어 있다고 믿습니다.</p></div></div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 5 -->
+<section class="block" id="map">
+  <div class="part-head">
+    <span class="no">05</span><h2>기능 → 파일 지도</h2>
+    <p class="sub">고치고 싶은 것에서 출발해 <code>--files</code>에 넣을 파일을 고릅니다. 경로는 <code>pi</code> 기준, 줄 수는 <code>karaoke</code> 브랜치 기준입니다. 파이썬 파일을 넣으면 <code>booth_pins.py</code>(63줄)는 저절로 들어갑니다.</p>
+  </div>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>고치고 싶은 것</th><th><code>--files</code>에 넣을 것</th><th class="num">줄</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="4">부품 더하기·바꾸기</td></tr>
+        <tr><td class="k">새 부품을 어디에 꽂을지 (배선표)</td><td><div class="paths"><code>booth_pins.py</code></div></td><td class="n">63</td><td><code>--type wiring</code>. 코드 없이 배선표만</td></tr>
+        <tr><td class="k">새 센서·액추에이터를 데몬에 넣기</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><span class="big">큰 파일</span> 나눠 받기. 새 작은 파일로 빼자고 해도 좋음</td></tr>
+        <tr><td class="k">핀 번호 바꾸기·핀 배치 출력</td><td><div class="paths"><code>booth_pins.py</code></div></td><td class="n">63</td><td>핀 번호는 이 파일에만</td></tr>
+        <tr><td class="k">배선 자가진단에 검사 더하기</td><td><div class="paths"><code>test_hardware_gpio.py</code></div></td><td class="n">158</td><td>부품마다 <code>test_…()</code> 함수 하나</td></tr>
+
+        <tr class="group"><td colspan="4">데몬 동작 (<code>main.py</code> 안)</td></tr>
+        <tr><td class="k">지시를 부품에 반영하는 방식</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><code>BoothHardware.apply()</code> — 도어락·릴레이·LED·스피커</td></tr>
+        <tr><td class="k">백엔드 통신 (폴링·보고·재시도·401/404 안내)</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><code>BackendClient</code></td></tr>
+        <tr><td class="k">키패드 비밀번호 입력</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><code>scan_keypad()</code>와 <code>main()</code> 루프 (1)</td></tr>
+        <tr><td class="k">PIR 입장 감지</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><code>main()</code> 루프 (2), <code>report_entry()</code></td></tr>
+        <tr><td class="k">안전 상태 (시작·종료 때)</td><td><div class="paths"><code>main.py</code></div></td><td class="n">505</td><td><code>safe_state()</code>, <code>close()</code>, <code>main()</code>의 <code>finally</code></td></tr>
+
+        <tr class="group"><td colspan="4">연습·확인용</td></tr>
+        <tr><td class="k">통신이 되는지만 확인</td><td><div class="paths"><code>01_ping_backend.py</code></div></td><td class="n">61</td><td></td></tr>
+        <tr><td class="k">GPIO 없이 print로 흉내 내는 데몬</td><td><div class="paths"><code>02_karaoke_daemon_mock.py</code></div></td><td class="n">195</td><td></td></tr>
+        <tr><td class="k">설정 키 이름</td><td><div class="paths"><code>.env.example</code></div></td><td class="n">31</td><td>값이 든 <code>.env</code>는 넣지 않음</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 6 -->
+<section class="block" id="tools">
+  <div class="part-head">
+    <span class="no">06</span><h2>도구 두 개</h2>
+    <p class="sub">둘 다 <code>pi</code> 폴더에서 실행합니다. 설치할 것 없이 파이썬과 git만 있으면 PC와 라즈베리파이 모두에서 돕니다.</p>
+  </div>
+
+  <div class="section">
+    <h3><code>context.py</code> — 프롬프트 만들기</h3>
+    <div class="code"><span class="where">PC PowerShell 또는 파이 터미널 · pi 폴더</span>
+<pre>python scripts/ai/context.py --type feature --task "하고 싶은 것" --done "완료 기준" --files main.py</pre></div>
+    <p class="small">파이에서 가상환경을 켜지 않았다면 <code>python</code> 대신 <code>python3</code>를 씁니다.</p>
+
+    <div class="tw">
+      <table class="wide">
+        <thead><tr><th>옵션</th><th>뜻</th><th>예</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><code>--type</code></td><td>틀 고르기: <code>feature</code> 기능 추가 · <code>bugfix</code> 오류 고치기 · <code>wiring</code> 배선 계획 · <code>explain</code> 설명 받기. 안 쓰면 <code>feature</code></td><td><code>--type wiring</code></td></tr>
+          <tr><td class="k"><code>--task</code></td><td>하고 싶은 것, 증상, 궁금한 점. 배선도 여기에 (필수)</td><td><code>--task "GPIO23에 리드 스위치…"</code></td></tr>
+          <tr><td class="k"><code>--task-file</code></td><td><code>--task</code> 대신 파일에서 읽기. 글이 길거나 큰따옴표가 들어갈 때</td><td><code>--task-file .ai/task.txt</code></td></tr>
+          <tr><td class="k"><code>--done</code></td><td>완료 기준. 여러 번 씁니다</td><td><code>--done "가짜 핀으로 오류 없이 켜진다"</code></td></tr>
+          <tr><td class="k"><code>--files</code></td><td>넣을 파일 (pi 기준 경로, 여러 개, 필수)</td><td><code>--files main.py test_hardware_gpio.py</code></td></tr>
+          <tr><td class="k"><code>--error</code></td><td>오류 메시지를 담은 파일</td><td><code>--error .ai/last-error.txt</code></td></tr>
+          <tr><td class="k"><code>--evidence</code></td><td>터미널 출력, 부품이 한 일, 실제 배선을 적은 파일</td><td><code>--evidence .ai/evidence.txt</code></td></tr>
+          <tr><td class="k"><code>--diff</code></td><td>커밋 뒤로 지금까지 바꾼 내용(git diff)도 넣기</td><td><code>--diff</code></td></tr>
+          <tr><td class="k"><code>--no-pins</code></td><td><code>booth_pins.py</code> 자동 포함 끄기</td><td></td></tr>
+          <tr><td class="k"><code>--out</code></td><td>저장 위치. 기본 <code>.ai/prompt.md</code></td><td></td></tr>
+          <tr><td class="k"><code>--help</code></td><td>사용법 보기</td><td><code>python scripts/ai/context.py --help</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>실습 4를 만들 때 나온 화면입니다.</p>
+<pre class="out"><span class="ok">✅ 프롬프트를 만들었습니다: pi/.ai/prompt.md</span>
+   유형: bugfix · 글자 수 36,399 (토큰 약 14,560개, 어림)
+   넣은 파일:
+     - pi/main.py  565줄  <span class="key">⚠️ 큰 파일</span>
+     - pi/booth_pins.py  67줄
+   증거: .ai/last-error.txt
+
+다음 차례:
+  1) VS Code에서 위 파일을 열고 Ctrl+A → Ctrl+C
+  2) 대화창에 붙여 넣고 보내기 → AI가 먼저 '계획'을 말합니다
+  3) 계획이 맞으면 '진행' → 파일 전체를 받아 VS Code에 붙여 넣기 → python scripts/ai/check.py</pre>
+
+    <h4>도구가 막아 주는 것</h4>
+    <ul>
+      <li><code>.env</code> 파일은 넣지 않습니다 (<code>.env.example</code>은 됩니다). <code>pi</code> 밖의 파일, <code>venv</code>·<code>__pycache__</code>도 넣지 않습니다.</li>
+      <li>키·토큰처럼 생긴 글자, <code>DEVICE_API_KEY=값</code> 줄, 데몬이 찍는 “출입증(API키)” 앞 글자를 <code>[가림]</code>으로 바꿉니다.</li>
+      <li>오류 글 속 <code>C:\Users\이름</code>, <code>/home/이름</code>을 <code>~</code>로 바꿉니다.</li>
+      <li>400줄이 넘는 파일에 “큰 파일” 표시를 달아 AI가 나눠 주게 합니다. 60,000자가 넘으면 경고합니다.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h3>틀 네 가지 (<code>--type</code>)</h3>
+    <div class="tpls">
+      <div class="tpl"><span class="t">wiring</span><h4>배선 계획</h4><p>코드 없이 배선표만. 부품 핀 → 물리 핀·BCM, 저항·전원, 연결 순서, 확인 방법, 선생님과 할 단계. 새 부품은 이것부터.</p></div>
+      <div class="tpl"><span class="t">feature</span><h4>기능 추가</h4><p>핀은 <code>booth_pins.py</code>에만, 새 액추에이터는 안전 상태에, <code>RPi.GPIO</code>·새 패키지 금지, 없는 API는 “백엔드 담당에게 부탁할 내용”으로.</p></div>
+      <div class="tpl"><span class="t">bugfix</span><h4>오류 고치기</h4><p><strong>원인 먼저</strong>, 그리고 코드·배선·설정·백엔드 중 어디 탓인지 가르기. <code>.env</code> 값은 묻지 않고 비교할 두 값만 알려 줍니다.</p></div>
+      <div class="tpl"><span class="t">explain</span><h4>설명 받기</h4><p>코드를 고치지 않고 <strong>줄 번호와 함께</strong> 설명만. 폴링, 풀업 같은 말은 한 줄로 풀어 줍니다.</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3><code>check.py</code> — 붙여 넣은 뒤 점검</h3>
+    <p>코드를 고치지는 않습니다. <code>git</code>이 아는 마지막 커밋과 비교해 <code>pi</code> 폴더에서 바뀐 파일을 살핍니다.</p>
+    <ul>
+      <li>바뀐 파일과 늘어난·지워진 줄 수. 생각보다 많이 지워졌으면 경고합니다</li>
+      <li><strong>생략 흔적</strong>(<code># ...</code>, “기존 코드와 동일”, “나머지 그대로”, <code>...</code>만 있는 줄)과 <strong>잘못 붙인 것</strong>(<code>```</code>, <code>### 파일:</code>, 줄 번호), <strong>조각 순서</strong></li>
+      <li><strong>파이썬 문법·들여쓰기</strong>(IndentationError, 탭), <strong>어디에도 없는 이름</strong>(실행하면 NameError가 날 오타·빠진 import)</li>
+      <li><strong>라즈베리파이 규칙</strong>: <code>RPi.GPIO</code> 사용, 코드에 바로 적은 핀 번호, 코드에 적은 장치 키, <code>main.py</code>에 고정된 <code>'mock'</code></li>
+      <li><strong>핀 배치</strong>: <code>booth_pins.py</code>에서 두 부품이 같은 핀을 쓰는지, BCM 번호(0~27)가 맞는지, I2C·SPI·UART 겸용 핀인지</li>
+      <li><strong>가짜 핀 시동 검사</strong>: 가짜 핀으로 <code>main.BoothHardware()</code>를 실제로 만들고 안전 상태·정리까지 해 봅니다. 핀 충돌, gpiozero 사용법 오류, 없는 패키지를 실행 전에 잡습니다</li>
+    </ul>
+    <div class="pair">
+      <div class="shot">
+        <span class="cap">통과 (실습 3 정답을 붙여 넣었을 때)</span>
+<pre class="out wrapped">🔎 AI 코드 붙여넣기 점검 (라즈베리파이)
+
+• pi/booth_pins.py (+4 −0)
+• pi/main.py (+68 −9)
+
+📌 핀 배치 (booth_pins.py)
+    <span class="ok">✅ 핀 14개, 겹침 없음</span>
+
+⏳ 가짜 핀(mock)으로 main.py 의 부품을 만들어 보는 중…
+    <span class="ok">✅ 가짜 핀 시동 검사: 부품 만들기 → 안전 상태 → 정리 통과 · 폴링할 액추에이터: door_lock_1,relay_1,led_1,buzzer_1</span>
+
+<span class="ok">✅ 문제를 찾지 못했습니다.</span>
+   이제 가짜 핀으로 실행해 터미널 출력과 관리자 화면을 눈으로 확인하세요. 실기기는 그다음, 선생님과 함께.</pre>
+      </div>
+      <div class="shot">
+        <span class="cap">걸림 (문 센서를 도어락 핀 17에 적었을 때)</span>
+<pre class="out wrapped">🔎 AI 코드 붙여넣기 점검 (라즈베리파이)
+
+• pi/booth_pins.py (+1 −1)
+
+📌 핀 배치 (booth_pins.py)
+    <span class="bad">❌ GPIO17 을(를) DOOR_LOCK_PIN, DOOR_SENSOR_PIN 가 함께 씁니다. 실행하면 GPIOPinInUse 오류가 납니다 — 비어 있는 핀으로 바꾸세요</span>
+
+⏳ 가짜 핀(mock)으로 main.py 의 부품을 만들어 보는 중…
+    <span class="bad">❌ 가짜 핀 시동 검사: gpiozero.exc.GPIOPinInUse: pin GPIO17 is already in use by &lt;gpiozero.OutputDevice object on pin GPIO17, active_high=True, is_active=False&gt;</span>
+
+오류 내용은 pi/.ai/last-error.txt 에 저장했습니다. AI에게 물어보려면:
+   python scripts/ai/context.py --type bugfix --task "붙여 넣은 뒤 이런 오류가 납니다" --error .ai/last-error.txt --files booth_pins.py
+
+<span class="bad">❌ 고칠 것이 있습니다. 위 ❌ 줄부터 해결하세요.</span></pre>
+      </div>
+    </div>
+    <div class="note"><span class="tag">통과해도</span><div><p>메서드 하나를 <code># ... 기존 코드와 동일 ...</code>로 생략한 파일도 가짜 핀 시동 검사는 통과했습니다. 그 메서드는 시동 때 불리지 않기 때문입니다. 그래서 <code>check.py</code>의 ❌·⚠️ 줄과 8번 “가짜 핀으로 확인”, 10번 “실기기 확인”이 모두 필요합니다.</p></div></div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 7 -->
+<section class="block" id="pledge">
+  <div class="part-head">
+    <span class="no">07</span><h2>답변 형식 약속</h2>
+    <p class="sub">모든 프롬프트 맨 끝에 붙는 여섯 가지입니다(<code>wiring</code>·<code>explain</code>은 코드가 없는 짧은 형식). 파이썬은 들여쓰기 한 칸이 동작을 바꾸므로 파일 전체를 받습니다.</p>
+  </div>
+
+  <ol class="pledge">
+    <li><b>먼저 계획만, 배선이 바뀌면 배선표도, 그리고 “진행할까요?”에서 멈춘다</b><span class="why">고칠 파일과 핀을 코드 500줄을 받기 전에 봅니다. 이미 쓰는 핀, 빠진 안전 상태를 여기서 잡습니다.</span><span class="if">어기면: <q>계획만 다시 말해 줘. 코드는 아직 쓰지 마.</q></span></li>
+    <li><b>코드는 한 답변에 파일 하나, 첫 줄부터 마지막 줄까지</b><span class="why">“이 함수 아래에 넣어”식 조각은 들여쓰기 깊이를 틀리기 쉽습니다. 파일 전체면 <kbd>Ctrl+A</kbd> <kbd>Ctrl+V</kbd> 하나로 끝납니다.</span><span class="if">어기면: <q>바꾼 부분만 말고 이 파일 전체를 줘.</q></span></li>
+    <li><b>절대 생략하지 않고, 스페이스 4칸으로 들여쓴다</b><span class="why"><code># 기존 코드 동일</code>을 그대로 붙이면 그 메서드가 사라지고, 실행 중에 그 부품을 쓰는 순간 멈춥니다.</span><span class="if">어기면: <q>생략 없이 이 파일 전체를 첫 줄부터 마지막 줄까지 다시 줘.</q></span></li>
+    <li><b>400줄이 넘는 파일은 나눠 준다</b><span class="why"><code>main.py</code>(505줄)는 한 번에 받으면 끊기거나 생략되기 쉽습니다. <code># ===== 여기까지 (1/2) — 다음 조각에 이어짐 =====</code> 표시를 붙이고, 함수나 클래스가 끝난 자리에서만 나눕니다.</span><span class="if">어기면: <q>main.py 를 (1/2), (2/2)로 나눠서 처음부터 다시 줘. 함수나 클래스가 끝난 자리에서 나눠 줘.</q></span></li>
+    <li><b>없는 것을 지어내지 않는다 — 핀은 <code>booth_pins.py</code>에, 비밀은 <code>.env</code>에</b><span class="why">없는 기기 id는 404, <code>RPi.GPIO</code>는 Pi 5에서 동작하지 않습니다. 새 pip 패키지는 파이에 설치가 안 될 수 있습니다.</span><span class="if">어기면: <q>RPi.GPIO 말고 gpiozero 로, 핀 번호는 booth_pins.py 에만 두고 다시 계획해 줘.</q></span></li>
+    <li><b>확인 방법: 가짜 핀 명령 → <code>check.py</code> → 실기기 순서</b><span class="why">PC에서 무엇을 보면 되는지, 파이에서 선생님과 무엇을 확인할지 압니다.</span><span class="if">어기면: <q>가짜 핀으로 확인하는 명령과 터미널에 찍혀야 할 줄, 실기기 확인 순서를 알려 줘.</q></span></li>
+  </ol>
+</section>
+
+<!-- ═══════════════════════════════════════════ 8 -->
+<section class="block" id="vscode">
+  <div class="part-head">
+    <span class="no">08</span><h2>붙여 넣기와 파이로 옮기기</h2>
+    <p class="sub">반영은 손으로 합니다. 파이썬이라 들여쓰기만 조심하면 됩니다.</p>
+  </div>
+
+  <div class="howto">
+    <div class="ht">
+      <h4>파일 전체 바꾸기</h4>
+      <ol>
+        <li>대화창 코드 블록의 <strong>복사 버튼</strong>을 누릅니다</li>
+        <li>VS Code에서 그 파일을 엽니다 (<kbd>Ctrl+P</kbd> → <code>main.py</code>)</li>
+        <li><kbd>Ctrl+A</kbd> → <kbd>Ctrl+V</kbd> → <kbd>Ctrl+S</kbd></li>
+        <li><code>python scripts/ai/check.py</code></li>
+      </ol>
+      <span class="warnline"><code>### 파일:</code> 줄과 <code>```</code> 줄은 복사하지 않습니다</span>
+    </div>
+    <div class="ht">
+      <h4>나눠 받은 <code>main.py</code> 이어 붙이기</h4>
+      <ol>
+        <li><code>(1/2)</code>을 <kbd>Ctrl+A</kbd> → <kbd>Ctrl+V</kbd></li>
+        <li>“다음” → <code>(2/2)</code>를 받으면 <kbd>Ctrl+End</kbd>로 맨 끝 → <kbd>Enter</kbd> → <kbd>Ctrl+V</kbd> → 저장</li>
+        <li><code>check.py</code>가 알려 주는 조각 표시 줄을 지우고 다시 점검</li>
+      </ol>
+<pre class="out wrapped"><span class="key">⚠️ 나눠 받은 조각 2개가 순서대로 다 붙었습니다. 확인이 끝나면 조각 표시 줄(259, 566번째 줄)을 지우세요.</span></pre>
+    </div>
+    <div class="ht">
+      <h4>들여쓰기 지키기</h4>
+      <ol>
+        <li>VS Code 오른쪽 아래가 <strong>Spaces: 4</strong>인지 봅니다. “Tab Size”면 눌러서 “들여쓰기를 스페이스로”</li>
+        <li>조각을 이어 붙인 자리는 위아래 줄의 왼쪽 칸이 맞는지 눈으로 봅니다</li>
+        <li><code>IndentationError</code>가 나면 그 줄 번호부터 봅니다</li>
+      </ol>
+    </div>
+    <div class="ht">
+      <h4>바뀐 곳 보기 · 되돌리기</h4>
+      <ol>
+        <li><kbd>Ctrl+Shift+G</kbd> 소스 제어 → 파일을 누르면 빨강(지운 줄)·초록(더한 줄)</li>
+        <li>계획에 없던 빨강이 길면 AI가 빠뜨린 것</li>
+        <li>되돌리기: 파일 오른쪽 클릭 → <strong>변경 내용 취소</strong> 또는 <code>git checkout -- main.py</code></li>
+      </ol>
+      <span class="warnline">되돌린 내용은 다시 살릴 수 없습니다. 잘 된 부분은 먼저 커밋합니다</span>
+    </div>
+    <div class="ht">
+      <h4>파이로 옮기기 (git)</h4>
+      <ol>
+        <li>PC: <code>git add booth_pins.py main.py</code> (pi 파일만) → <code>git commit -m "…"</code> → <code>git push</code></li>
+        <li>파이(ssh): <code>cd agent-vibe-coding-starter-kit2/pi</code> → <code>git pull</code></li>
+        <li><code>source venv/bin/activate</code> → <code>python scripts/ai/check.py</code>로 파이에서도 한 번 점검</li>
+      </ol>
+      <span class="warnline"><code>pi/.env</code>는 git으로 옮겨지지 않습니다. 파이의 <code>.env</code>는 파이에서 따로 씁니다</span>
+    </div>
+    <div class="ht">
+      <h4>실기기 확인</h4>
+      <ol>
+        <li>데몬을 끄고(<kbd>Ctrl+C</kbd>) <strong>파이 전원을 뽑습니다</strong></li>
+        <li>배선표대로 연결 → 선생님 확인 → 전원 연결</li>
+        <li><code>python test_hardware_gpio.py</code> → <code>python main.py</code></li>
+        <li>관리자 화면의 버튼과 부품의 움직임, 터미널 출력을 함께 봅니다</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>가짜 핀으로 실행하기</h3>
+    <div class="code"><span class="where">PC PowerShell · pi 폴더 (백엔드를 먼저 켭니다)</span>
+<pre>$env:GPIOZERO_PIN_FACTORY="mock"; python main.py</pre></div>
+    <div class="code"><span class="where">라즈베리파이 터미널 · pi 폴더</span>
+<pre>GPIOZERO_PIN_FACTORY=mock python main.py</pre></div>
+    <p>가짜 핀에서는 버튼·센서 입력이 저절로 바뀌지 않습니다. 문 센서처럼 입력을 바꿔 봐야 하면 키보드로 흉내 내는 <code>mock_door.py</code>(<a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EB%AC%B8%EC%84%BC%EC%84%9C-%EB%B6%80%EC%A0%80/README.md">문 센서 실습</a>의 pi-3 패치)처럼 <code>Device.pin_factory.pin(번호).drive_low()</code>로 핀을 바꾸는 작은 파일을 AI에게 부탁합니다. 실습 3에서 실제로 찍힌 줄입니다.</p>
+<pre class="out wrapped">📬 [지시] buzzer_1: off → on
+   🔔 삐- 삐- 경고 부저를 울립니다 (잠긴 문이 열려 있습니다).
+   📤 보고 완료 — 대시보드에 'on' 로 확정 표시됩니다.
+🧲 [문 센서] 문이 열렸습니다.
+   📤 문 상태 보고 완료 — 대시보드에 '열림'으로 표시됩니다.</pre>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 9 -->
+<section class="block" id="chat">
+  <div class="part-head">
+    <span class="no">09</span><h2>대화 관리</h2>
+    <p class="sub">AI는 대화가 길어질수록 앞에서 준 규칙과 답변 형식을 잊습니다.</p>
+  </div>
+
+  <ul>
+    <li><strong>작업 하나에 새 대화 하나.</strong> 배선표를 받은 대화와 코드를 받는 대화도 나눕니다. 배선표의 결론(고른 핀)은 다음 프롬프트의 <code>--task</code>에 적습니다.</li>
+    <li>파일을 붙여 넣은 뒤 다시 크게 물을 때는 <strong>최신 파일로 프롬프트를 다시 만듭니다</strong>. 지금까지 바꾼 것을 알려 주려면 <code>--diff</code>.</li>
+    <li>생략이 나오거나 <code>RPi.GPIO</code>가 다시 나오면 대화가 길어졌다는 신호입니다. 새 대화로 옮깁니다.</li>
+    <li>서비스마다 길이 한도와 첨부 방식이 다릅니다. 긴 글이 첨부 파일로 바뀌어도 괜찮고, <code>prompt.md</code> 하나를 첨부해도 됩니다. 저장소 파일을 낱개로 여러 개 올리지는 않습니다.</li>
+  </ul>
+
+  <div class="section">
+    <h3>보낼 말 모음</h3>
+    <div class="phrases">
+      <div class="phrase"><span><span class="when">계획이 맞을 때</span><span class="text">진행</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">파일이나 조각 하나를 붙여 넣은 뒤</span><span class="text">다음</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">새 부품을 달기 전에</span><span class="text">코드는 아직 쓰지 말고 배선표만 먼저 줘. 이미 쓰는 핀과 겹치지 않게, 물리 핀 번호와 BCM 번호를 둘 다 적어 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">생략이 보일 때</span><span class="text">생략 없이 이 파일 전체를 첫 줄부터 마지막 줄까지 다시 줘. 들여쓰기는 스페이스 4칸으로.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">RPi.GPIO나 코드 속 핀 번호가 보일 때</span><span class="text">RPi.GPIO 말고 gpiozero 로, 핀 번호는 booth_pins.py 에만 두고 다시 계획해 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">새 액추에이터가 안전 상태에 없을 때</span><span class="text">새 부품도 시작·종료 때 꺼지도록 safe_state()와 close()에 넣어 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">센서를 매번 보고할 때</span><span class="text">센서 값은 바뀔 때만 보고하게 다시 계획해 줘. 메인 루프는 0.05초마다 돌아.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">답이 끊겼을 때</span><span class="text">답이 끊겼어. 그 파일을 (1/2), (2/2)로 나눠서 처음부터 다시 줘. 함수나 클래스가 끝난 자리에서 나누고, 약속한 표시를 붙여 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">오류가 났을 때 (아래에 오류를 붙인다)</span><span class="text">이 오류가 났어. 원인이 코드인지, 배선인지, .env 설정인지, 백엔드인지부터 말해 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+      <div class="phrase"><span><span class="when">AI가 키 값을 물을 때</span><span class="text">.env 값은 보안 때문에 말할 수 없어. 어떤 파일의 어떤 두 값을 비교하면 되는지만 알려 줘.</span></span><button type="button" class="chip-copy">복사</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 10 -->
+<section class="block" id="trouble">
+  <div class="part-head">
+    <span class="no">10</span><h2>자주 겪는 문제</h2>
+    <p class="sub">코드 탓, 배선 탓, 설정 탓, 백엔드 탓이 섞여 나옵니다. 먼저 어느 쪽인지 가릅니다.</p>
+  </div>
+
+  <div class="tw">
+    <table class="wide">
+      <thead><tr><th>증상</th><th>왜</th><th>이렇게</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="3">붙여 넣은 뒤 (코드)</td></tr>
+        <tr><td class="k"><code>❌ 주석이 '...'로 시작합니다</code></td><td>AI가 코드를 줄여 썼습니다</td><td>보낼 말 “생략 없이 …”. 되풀이되면 새 대화</td></tr>
+        <tr><td class="k"><code>IndentationError</code>, <code>TabError</code></td><td>붙여 넣을 때 칸이 밀렸거나, 조각 경계가 어긋났거나, 탭이 섞였습니다</td><td>그 줄 앞뒤의 왼쪽 칸을 맞추기. 오른쪽 아래 Spaces: 4</td></tr>
+        <tr><td class="k"><code>'…' 이라는 이름이 어디에도 없습니다</code></td><td>오타, 빠진 <code>import</code>, 빠진 조각</td><td><code>check.py</code>가 알려 주는 <code>--type bugfix --error</code> 명령으로 다시 묻기</td></tr>
+        <tr><td class="k"><code>GPIOPinInUse: pin GPIO17 is already in use</code></td><td>두 부품이 같은 핀</td><td><code>booth_pins.py</code>에서 빈 핀으로. 배선도 같이 옮기기</td></tr>
+        <tr><td class="k"><code>PinInvalidState … "active_state" is not defined</code></td><td><code>pull_up=None</code>(외부 저항)인데 <code>active_state</code>가 없습니다</td><td>외부 풀업이면 <code>active_state=False</code> (실습 4)</td></tr>
+        <tr><td class="k"><code>No module named 'RPi'</code></td><td>Pi 5에서 안 되는 <code>RPi.GPIO</code>를 썼습니다</td><td>gpiozero로 다시 부탁</td></tr>
+        <tr><td class="k"><code>main.py 안에 'mock' 이 있습니다</code></td><td>가짜 핀이 코드에 고정돼 실기기에서 부품이 안 움직입니다</td><td>가짜 핀은 실행할 때 <code>GPIOZERO_PIN_FACTORY=mock</code>으로만</td></tr>
+
+        <tr class="group"><td colspan="3">실행 환경 (설치·설정)</td></tr>
+        <tr><td class="k">PC에서 <code>No module named 'gpiozero'</code></td><td>PC에 gpiozero가 없습니다</td><td><code>pip install gpiozero requests python-dotenv</code> (venv를 켠 채로)</td></tr>
+        <tr><td class="k">파이에서 <code>pip install lgpio</code> 오류</td><td>Pi 5는 PyPI 빌드가 안 됩니다</td><td>APT로 <code>python3-gpiozero python3-lgpio</code>, venv는 <code>--system-site-packages</code></td></tr>
+        <tr><td class="k"><code>🚨 [인증 실패 401]</code></td><td>두 <code>.env</code>의 <code>DEVICE_API_KEY</code>가 다릅니다</td><td>두 파일을 직접 열어 비교. 값은 대화창에 붙이지 않기</td></tr>
+        <tr><td class="k"><code>🔍 [부품 없음 404]</code></td><td>백엔드에 그 기기 id가 없습니다</td><td>백엔드 담당에게 등록 부탁 (코드 문제가 아님)</td></tr>
+        <tr><td class="k"><code>❌ [백엔드 연결 실패]</code></td><td><code>BACKEND_URL</code>이 <code>localhost</code>이거나 IP가 틀림, 다른 공유기, 방화벽</td><td>백엔드 PC의 IPv4(<code>ipconfig</code>)로. 같은 공유기인지</td></tr>
+
+        <tr class="group"><td colspan="3">실기기 (배선)</td></tr>
+        <tr><td class="k">“해제”라는데 잠기고, “잠금”이라는데 열린다</td><td>LOW 트리거 릴레이 보드</td><td><code>pi/.env</code>에 <code>RELAY_ACTIVE_HIGH=false</code></td></tr>
+        <tr><td class="k">가짜 핀에서는 되는데 실기기는 반응이 없다</td><td>물리 핀과 BCM을 헷갈렸거나, 전원·GND가 빠졌거나, 접촉 불량</td><td>배선표와 대조 → <code>test_hardware_gpio.py</code> → 증거로 묻기</td></tr>
+        <tr><td class="k">문을 닫았는데 “열렸습니다”가 찍힌다</td><td>풀업·스위치 연결이 생각과 반대이거나 판정 코드가 반대</td><td>본 것과 실제 배선을 <code>--evidence</code>로. 코드보다 배선부터 확인</td></tr>
+        <tr><td class="k">센서 값이 짧은 사이에 여러 번 바뀐다</td><td>스위치 떨림(채터링), 긴 선</td><td><code>bounce_time</code>, 선 정리. 값이 바뀔 때만 보고하는지</td></tr>
+        <tr><td class="k">AI가 백엔드를 고치라고 한다</td><td>파이만으로 안 되는 일입니다</td><td>코드를 받지 말고 “백엔드 담당에게 부탁할 내용”으로 정리</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 11 -->
+<section class="block" id="practice">
+  <div class="part-head">
+    <span class="no">11</span><h2>실습과 점검표</h2>
+    <p class="sub">네 실습은 실제로 만든 프롬프트, 실제로 실행한 출력, 준비·정답 패치와 함께 <a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4%EB%A7%81-%ED%8C%8C%EC%9D%B4/README.md">실습 폴더</a>에 있습니다.</p>
+  </div>
+
+  <div class="labs">
+    <div class="lab">
+      <div class="t"><span>실습 1 · explain · 15분</span></div>
+      <h4>설명 받기: 문 열기 버튼이 도어락까지</h4>
+      <p>같은 질문을 아무것도 붙이지 않고 한 번, <code>context.py</code> 프롬프트로 한 번 물어 답을 비교합니다.</p>
+      <dl><dt>파일</dt><dd><code>main.py</code></dd><dt>길이</dt><dd>34,245자</dd></dl>
+    </div>
+    <div class="lab">
+      <div class="t"><span>실습 2 · wiring · 20분</span></div>
+      <h4>배선 계획: 리드 스위치와 부저</h4>
+      <p>코드 없이 배선표를 받고, 핀이 겹치지 않는지와 전압을 직접 검토해 선생님께 확인받습니다.</p>
+      <dl><dt>파일</dt><dd><code>booth_pins.py</code></dd><dt>길이</dt><dd>12,963자</dd></dl>
+    </div>
+    <div class="lab">
+      <div class="t"><span>실습 3 · feature · 45분</span></div>
+      <h4>기능 추가: 데몬에 문 센서·부저</h4>
+      <p><code>main.py</code>를 나눠 받아 이어 붙이고, <code>check.py</code>와 가짜 핀 실행으로 확인합니다. 일부러 틀려 보기도 있습니다.</p>
+      <dl><dt>파일</dt><dd><code>main.py</code></dd><dt>길이</dt><dd>32,525자</dd></dl>
+    </div>
+    <div class="lab">
+      <div class="t"><span>실습 4 · bugfix · 25분</span></div>
+      <h4>오류 고치기: 외부 풀업 저항을 달았더니</h4>
+      <p>가짜 핀 시동 검사가 잡은 <code>PinInvalidState</code>를 오류 글과 배선으로 묻고, 한 줄로 고칩니다.</p>
+      <dl><dt>파일</dt><dd><code>main.py</code></dd><dt>길이</dt><dd>36,399자</dd></dl>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>점검표</h3>
+    <p class="small">체크한 것은 이 브라우저에만 남습니다. 작업이 끝나면 지우고 다음 작업에 다시 씁니다.</p>
+    <div class="checks">
+      <div class="check">
+        <h4>보내기 전</h4>
+        <label><input type="checkbox" id="c-s1"><span>새 부품이면 배선표를 먼저 받았고, 고른 핀을 <code>--task</code>에 적었다</span></label>
+        <label><input type="checkbox" id="c-s2"><span>실제 배선(모델명·핀 이름·물리 핀·저항·전압)을 글로 적었다</span></label>
+        <label><input type="checkbox" id="c-s3"><span>오류나 증상이면 <code>--error</code>나 <code>--evidence</code>를 붙였다</span></label>
+        <label><input type="checkbox" id="c-s4"><span><code>prompt.md</code>에 키·비밀번호가 없다</span></label>
+        <label><input type="checkbox" id="c-s5"><span>새 대화에 붙여 넣었다</span></label>
+      </div>
+      <div class="check">
+        <h4>답을 받은 뒤</h4>
+        <label><input type="checkbox" id="c-r1"><span>첫 답이 코드 없는 계획(과 배선표)이었다</span></label>
+        <label><input type="checkbox" id="c-r2"><span>핀이 <code>booth_pins.py</code>에만 있고 겹치지 않는다</span></label>
+        <label><input type="checkbox" id="c-r3"><span>새 액추에이터가 <code>safe_state()</code>·<code>close()</code>에 들어갔다</span></label>
+        <label><input type="checkbox" id="c-r4"><span><code>RPi.GPIO</code>·새 pip 패키지·없는 API가 없다</span></label>
+        <label><input type="checkbox" id="c-r5"><span>조각을 이어 붙이고 표시 줄을 지웠다</span></label>
+        <label><input type="checkbox" id="c-r6"><span><code>python scripts/ai/check.py</code>에 ❌가 없다</span></label>
+      </div>
+      <div class="check">
+        <h4>실기기 전</h4>
+        <label><input type="checkbox" id="c-c1"><span>가짜 핀으로 <code>main.py</code>를 돌려 완료 기준을 눈으로 확인했다</span></label>
+        <label><input type="checkbox" id="c-c2"><span><code>pi</code> 파일만 커밋했고 파이에서 <code>git pull</code> 했다</span></label>
+        <label><input type="checkbox" id="c-c3"><span>파이 전원을 뽑은 상태에서 배선했다</span></label>
+        <label><input type="checkbox" id="c-c4"><span>선생님이 배선을 확인했다 (220V는 선생님과 함께)</span></label>
+        <label><input type="checkbox" id="c-c5"><span><code>test_hardware_gpio.py</code>가 통과했다</span></label>
+        <label><input type="checkbox" id="c-c6"><span>핀을 바꿨으면 <code>context-card.md</code>의 핀 배치표도 고쳤다</span></label>
+      </div>
+    </div>
+    <div class="row"><button type="button" class="reset" id="reset-checks">체크 모두 지우기</button></div>
+  </div>
+</section>
+
+<footer>
+  <span>함께 볼 것</span>
+  <ul>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4%EB%A7%81-%ED%8C%8C%EC%9D%B4/README.md">실습 — 대화창 AI로 라즈베리파이 작업하기</a> · 실습 4개, 실제 프롬프트와 출력</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/tree/karaoke/pi/scripts/ai">pi/scripts/ai</a> · 도구 두 개, 프로젝트 카드, 틀 네 가지, 답변 형식</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EB%B6%80%EB%A1%9DI-%EB%9D%BC%EC%A6%88%EB%B2%A0%EB%A6%AC%ED%8C%8C%EC%9D%B45-%EC%8B%A4%EA%B8%B0%EA%B8%B0-%EB%A7%88%EC%9D%B4%EA%B7%B8%EB%A0%88%EC%9D%B4%EC%85%98-%EB%A7%A4%EB%89%B4%EC%96%BC.html">부록I 라즈베리파이 5 실기기 연동</a> · 가상환경, 배선 안전, 핀 배치, 자가진단, 부팅 자동 실행</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/%EC%8B%A4%EC%8A%B5-%EB%AC%B8%EC%84%BC%EC%84%9C-%EB%B6%80%EC%A0%80/README.md">문 열림 센서 + 경고 부저 실습</a> · 같은 기능을 영상으로, 정답 패치</li>
+    <li><a href="https://github.com/foxjini/agent-vibe-coding-starter-kit2/blob/karaoke/docs/06-%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EC%BB%A8%ED%85%8D%EC%8A%A4%ED%8A%B8-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4%EB%A7%81-%EB%A7%A4%EB%89%B4%EC%96%BC.html">본편 06 프론트엔드 편</a> · 같은 방식, 화면 담당용</li>
+  </ul>
+  <span>본편 07 · 웹 예약 연동 자동화 학교 노래방 부스 관리 시스템 · 인천전자마이스터고</span>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var PREFIX = "piCtxManual:";
+  function load(key) { try { return localStorage.getItem(PREFIX + key); } catch (e) { return null; } }
+  function save(key, value) {
+    try { if (value === null) localStorage.removeItem(PREFIX + key); else localStorage.setItem(PREFIX + key, value); } catch (e) {}
+  }
+
+  // 클릭 안에서 복사하고, 막혀 있으면 글자를 선택해 Ctrl+C를 안내한다
+  function copyText(text, node, btn, label) {
+    function done(msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = label; }, 1600); }
+    function fallback() {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      done("선택됨 · Ctrl+C");
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("복사됨"); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  // ── 명령 복사 ──
+  var blocks = document.querySelectorAll(".code pre");
+  Array.prototype.forEach.call(blocks, function (pre) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy";
+    btn.textContent = "복사";
+    btn.setAttribute("aria-label", "이 명령 복사");
+    btn.addEventListener("click", function () { copyText(pre.innerText.replace(/\n$/, ""), pre, btn, "복사"); });
+    pre.parentNode.appendChild(btn);
+  });
+
+  // ── 보낼 말 복사 ──
+  var chips = document.querySelectorAll(".phrase .chip-copy");
+  Array.prototype.forEach.call(chips, function (btn) {
+    var text = btn.parentNode.querySelector(".text");
+    btn.setAttribute("aria-label", "“" + text.textContent + "” 복사");
+    btn.addEventListener("click", function () { copyText(text.textContent, text, btn, "복사"); });
+  });
+
+  // ── 점검표 (이 브라우저에만) ──
+  var boxes = document.querySelectorAll(".check input[type=checkbox]");
+  Array.prototype.forEach.call(boxes, function (box) {
+    box.checked = load("check:" + box.id) === "1";
+    box.addEventListener("change", function () { save("check:" + box.id, box.checked ? "1" : null); });
+  });
+  var reset = document.getElementById("reset-checks");
+  if (reset) reset.addEventListener("click", function () {
+    Array.prototype.forEach.call(boxes, function (box) { box.checked = false; save("check:" + box.id, null); });
+  });
+})();
+</script>

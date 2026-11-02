@@ -1,0 +1,15 @@
+diff --git a/pi/main.py b/pi/main.py
+index 139cb9b..b91f2d1 100644
+--- a/pi/main.py
++++ b/pi/main.py
+@@ -128,8 +128,9 @@ class BoothHardware:
+         # 센서
+         self.pir = DigitalInputDevice(pins.PIR_PIN)
+         # 문 열림 센서(리드 스위치): 한쪽 선은 GPIO, 다른 쪽은 GND.
++        # 3.3V와 GPIO 사이에 10kΩ 외부 풀업 저항을 달았으므로 내부 풀업은 끈다.
+         # 문이 닫혀 자석이 붙으면 스위치가 닫혀 '눌림'(is_pressed=True)으로 읽힌다.
+-        self.door_sensor = Button(pins.DOOR_SENSOR_PIN, pull_up=True, bounce_time=0.1)
++        self.door_sensor = Button(pins.DOOR_SENSOR_PIN, pull_up=None, bounce_time=0.1)
+ 
+         # 키패드: 행은 출력(평소 HIGH), 열은 입력(내부 풀업)
+         self.rows = [OutputDevice(p, initial_value=True) for p in pins.KEYPAD_ROW_PINS]

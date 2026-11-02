@@ -1,0 +1,43 @@
+========================================================================
+🎤 [라즈베리파이 5] 학교 노래방 부스 제어 데몬 — 실기기 모드
+========================================================================
+📍 백엔드 주소   : http://127.0.0.1:8000
+🔑 출입증(API키) : booth-********
+⏱️ 폴링 주기     : 3.0초
+🔊 스피커        : browser  (부스 웹 화면이 소리를 냅니다)
+🔌 GPIO 배치
+  🚪 도어락        GPIO 17
+  ⚡ 전원 릴레이    GPIO 27  (220V — 취급 주의)
+  💡 조명 LED      GPIO 22
+  🔔 경고 부저      GPIO 25
+  👀 PIR 센서      GPIO 24
+  🧲 문 열림 센서   GPIO 23
+  🔢 키패드 행      GPIO [5, 6, 13, 19]
+  🔢 키패드 열      GPIO [26, 16, 20, 21]
+  🔌 릴레이 극성    RELAY_ACTIVE_HIGH=True
+------------------------------------------------------------------------
+종료하려면 Ctrl + C 를 누르세요.
+========================================================================
+Traceback (most recent call last):
+  File "…/pi/main.py", line 565, in <module>
+    main()
+  File "…/pi/main.py", line 442, in main
+    hw = BoothHardware()
+         ^^^^^^^^^^^^^^^
+  File "…/pi/main.py", line 133, in __init__
+    self.door_sensor = Button(pins.DOOR_SENSOR_PIN, pull_up=None, bounce_time=0.1)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "…/site-packages/gpiozero/devices.py", line 108, in __call__
+    self = super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "…/site-packages/gpiozero/input_devices.py", line 412, in __init__
+    super().__init__(
+  File "…/site-packages/gpiozero/mixins.py", line 417, in __init__
+    super().__init__(*args, **kwargs)
+  File "…/site-packages/gpiozero/input_devices.py", line 162, in __init__
+    super().__init__(
+  File "…/site-packages/gpiozero/mixins.py", line 243, in __init__
+    super().__init__(*args, **kwargs)
+  File "…/site-packages/gpiozero/input_devices.py", line 91, in __init__
+    raise PinInvalidState(
+gpiozero.exc.PinInvalidState: Pin GPIO23 is defined as floating, but "active_state" is not defined

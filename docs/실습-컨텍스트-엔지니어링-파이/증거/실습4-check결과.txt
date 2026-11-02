@@ -1,0 +1,17 @@
+
+🔎 AI 코드 붙여넣기 점검 (라즈베리파이)
+
+• pi/main.py (+2 −1)
+
+📌 핀 배치 (booth_pins.py)
+    ✅ 핀 14개, 겹침 없음
+
+⏳ 가짜 핀(mock)으로 main.py 의 부품을 만들어 보는 중…
+    ❌ 가짜 핀 시동 검사: gpiozero.exc.PinInvalidState: Pin GPIO23 is defined as floating, but "active_state" is not defined
+
+오류 내용은 pi/.ai/last-error.txt 에 저장했습니다. AI에게 물어보려면:
+   python scripts/ai/context.py --type bugfix --task "붙여 넣은 뒤 이런 오류가 납니다" --error .ai/last-error.txt --files main.py
+
+❌ 고칠 것이 있습니다. 위 ❌ 줄부터 해결하세요.
+   생략·붙여넣기 문제는 AI에게 '생략 없이 파일 전체를 다시 달라'고 하거나, 붙여 넣기를 다시 하세요.
+

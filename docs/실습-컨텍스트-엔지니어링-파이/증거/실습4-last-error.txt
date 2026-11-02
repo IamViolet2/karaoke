@@ -1,0 +1,20 @@
+[가짜 핀 시동 검사] GPIOZERO_PIN_FACTORY=mock 으로 main.BoothHardware() 를 만들다 난 오류
+Traceback (most recent call last):
+  File "<string>", line 14, in <module>
+  File "pi/main.py", line 133, in __init__
+    self.door_sensor = Button(pins.DOOR_SENSOR_PIN, pull_up=None, bounce_time=0.1)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "…/site-packages/gpiozero/devices.py", line 108, in __call__
+    self = super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "…/site-packages/gpiozero/input_devices.py", line 412, in __init__
+    super().__init__(
+  File "…/site-packages/gpiozero/mixins.py", line 417, in __init__
+    super().__init__(*args, **kwargs)
+  File "…/site-packages/gpiozero/input_devices.py", line 162, in __init__
+    super().__init__(
+  File "…/site-packages/gpiozero/mixins.py", line 243, in __init__
+    super().__init__(*args, **kwargs)
+  File "…/site-packages/gpiozero/input_devices.py", line 91, in __init__
+    raise PinInvalidState(
+gpiozero.exc.PinInvalidState: Pin GPIO23 is defined as floating, but "active_state" is not defined
