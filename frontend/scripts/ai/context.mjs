@@ -8,7 +8,8 @@
 //   npm run ai:context -- --type explain --task "알고 싶은 것" --files hooks/useBoothSession.ts
 //
 // 옵션: --type feature|bugfix|ui|explain · --task 글 · --task-file 파일 · --done 글(여러 번) · --files 경로...
-//       --error 파일 · --diff(지금까지 바꾼 내용 포함) · --no-types · --out 경로
+//       --error 파일(오류 메시지) · --evidence 파일(화면·콘솔·네트워크에서 본 것) · --diff(지금까지 바꾼 내용)
+//       --no-types · --out 경로
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -36,13 +37,15 @@ function parseArgs(argv) {
     else if (a === "--task-file") o.task = readText(next());
     else if (a === "--done") o.done.push(next());
     else if (a === "--error") o.error = next();
+    else if (a === "--evidence") o.evidence = next();
     else if (a === "--diff") o.diff = true;
     else if (a === "--no-types") o.types = false;
     else if (a === "--out") o.out = next();
     else if (a === "--files") {
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) o.files.push(argv[++i]);
     } else if (a === "-h" || a === "--help") {
-      console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(0, 13).join("\n"));
+      const src = fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n");
+      console.log(src.slice(0, src.findIndex((l) => l.startsWith("import"))).join("\n"));
       process.exit(0);
     } else fail(`모르는 옵션입니다: ${a}  (도움말: npm run ai:context -- --help)`);
   }
@@ -150,6 +153,11 @@ if (o.error) {
   const fence = fenceFor(err);
   parts.push(`# 증거 — 오류 메시지 그대로\n\n${fence}\n${err}\n${fence}`);
 }
+if (o.evidence) {
+  const ev = maskSecrets(readText(o.evidence).trim(), o.evidence, warnings);
+  const fence = fenceFor(ev);
+  parts.push(`# 증거 — 내가 화면·콘솔·네트워크에서 본 것 그대로\n\n${fence}\n${ev}\n${fence}`);
+}
 if (o.diff) {
   const d = maskSecrets(gitDiff(), "git diff", warnings);
   const fence = fenceFor(d);
@@ -170,6 +178,7 @@ console.log(`   유형: ${o.type} · 글자 수 ${chars.toLocaleString()} (토�
 console.log("   넣은 파일:");
 for (const b of blocks) console.log(`     - frontend/${b.rel}  ${b.lines}줄${b.big ? "  ⚠️ 큰 파일" : ""}`);
 if (o.error) console.log(`   증거: ${o.error}`);
+if (o.evidence) console.log(`   증거: ${o.evidence}`);
 if (o.diff) console.log("   증거: 지금까지 바꾼 내용(git diff)");
 if (chars > WARN_CHARS) {
   console.log(`\n⚠️ 글이 깁니다(${chars.toLocaleString()}자). 대화창이 잘라 먹을 수 있습니다.`);

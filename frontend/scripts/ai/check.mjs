@@ -73,7 +73,7 @@ for (const { file, isNew } of changed) {
     added = Number(ns[0]) || 0;
     removed = Number(ns[1]) || 0;
     const old = run("git", ["show", `HEAD:${prefix}${file}`]);
-    before = old.status === 0 ? old.stdout.split("\n").length : 0;
+    before = old.status === 0 ? old.stdout.replace(/\n$/, "").split("\n").length : 0;
   }
   const notes = [];
   lines.forEach((l, i) => {
