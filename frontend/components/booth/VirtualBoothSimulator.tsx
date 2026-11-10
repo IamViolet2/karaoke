@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -62,12 +63,31 @@ export function VirtualBoothSimulator({
   const speaker = devMap["speaker_1"] || { current_state: "idle" };
   const pir = devMap["pir_1"] || { current_state: "standby" };
 
-  const isDoorUnlocked = doorLock.current_state === "unlocked" || doorLock.current_state === "open";
+  const isDoorUnlocked =
+    doorLock.current_state === "unlocked" ||
+    doorLock.current_state === "open";
   const isPowerOn = relay.current_state === "on";
   const isLedOn = led.current_state === "on";
   const isLedBlink = led.current_state === "blink";
   const isSpeakerPlaying = speaker.current_state === "playing";
   const isPersonDetected = pir.current_state === "detected";
+
+  // 강제 종료 중복 실행 방지
+  const [isEnding, setIsEnding] = useState(false);
+
+  const handleSimulateEnd = async () => {
+    if (!isAdmin || isEnding) return;
+
+    setIsEnding(true);
+
+    try {
+      await onSimulateEnd();
+    } catch (error) {
+      console.error("이용 종료 시나리오 실행 오류:", error);
+    } finally {
+      setIsEnding(false);
+    }
+  };
 
   // 퇴실곡 미리 듣기 — 선생님이 음원 파일이 제대로 있는지 확인하는 용도다.
   // 실제 이용 종료 때는 부스 화면이 튼다.
@@ -81,6 +101,7 @@ export function VirtualBoothSimulator({
     audio.onpause = () => setIsPlayingClosingAudio(false);
     audio.onended = () => setIsPlayingClosingAudio(false);
     closingAudioRef.current = audio;
+
     return () => {
       audio.pause();
       closingAudioRef.current = null;
@@ -90,12 +111,16 @@ export function VirtualBoothSimulator({
   const toggleClosingSong = () => {
     const audio = closingAudioRef.current;
     if (!audio) return;
+
     if (isPlayingClosingAudio) {
       audio.pause();
       return;
     }
+
     audio.currentTime = 0;
-    audio.play().catch((err) => console.warn("퇴실곡 미리 듣기 실패:", err));
+    audio.play().catch((err) =>
+      console.warn("퇴실곡 미리 듣기 실패:", err)
+    );
   };
 
   return (
@@ -125,7 +150,6 @@ export function VirtualBoothSimulator({
             </div>
           </div>
 
-
           {/* Booth Visual Room Simulator */}
           <div
             className={`relative w-full h-64 rounded-xl border-2 transition-all duration-500 flex flex-col justify-between p-6 overflow-hidden ${
@@ -148,7 +172,11 @@ export function VirtualBoothSimulator({
                 <Lightbulb className={`w-4 h-4 ${isLedBlink ? "animate-spin" : ""}`} />
                 <span>
                   부스 조명 LED:{" "}
-                  {isLedBlink ? "10분 전 깜빡임 (BLINK)" : isLedOn ? "점등 (ON)" : "소등 (OFF)"}
+                  {isLedBlink
+                    ? "10분 전 깜빡임 (BLINK)"
+                    : isLedOn
+                    ? "점등 (ON)"
+                    : "소등 (OFF)"}
                 </span>
               </div>
             </div>
@@ -207,9 +235,13 @@ export function VirtualBoothSimulator({
                   {isPlayingClosingAudio
                     ? "퇴실곡 미리 듣는 중"
                     : isSpeakerPlaying
-                    ? (speaker.desired_value && typeof speaker.desired_value === "object" && "track" in speaker.desired_value
-                        ? String((speaker.desired_value as Record<string, unknown>).track)
-                        : "음성 안내 중")
+                    ? speaker.desired_value &&
+                      typeof speaker.desired_value === "object" &&
+                      "track" in speaker.desired_value
+                      ? String(
+                          (speaker.desired_value as Record<string, unknown>).track
+                        )
+                      : "음성 안내 중"
                     : "대기 중 (IDLE)"}
                 </span>
               </div>
@@ -230,17 +262,17 @@ export function VirtualBoothSimulator({
                   </strong>
                 </span>
               </div>
+
               <button
                 onClick={() => void onSimulateEntry()}
-                disabled={!isAdmin}
-                className="px-3 py-1 rounded bg-raised hover:bg-line-strong/90 text-ink-2 border border-line-strong text-[11px] transition-colors flex items-center gap-1.5 cursor-pointer"
+                disabled={!isAdmin || isEnding}
+                className="px-3 py-1 rounded bg-raised hover:bg-line-strong/90 text-ink-2 border border-line-strong text-[11px] transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <UserCheck className="w-3.5 h-3.5 text-free" />
                 입장 감지 테스트
               </button>
             </div>
           </div>
-
         </div>
 
         {/* 오른쪽: 시나리오 강제 실행 · 퇴실곡 미리 듣기 · 기기 직접 제어 */}
@@ -249,27 +281,31 @@ export function VirtualBoothSimulator({
             <SlidersHorizontal className="w-4 h-4 text-brass" />
             시나리오 실행 · 직접 제어
           </h3>
+
           {/* Quick Scenario Test Buttons */}
           <div className="space-y-2 pt-2">
             <h4 className="text-xs font-semibold text-ink-3">
               자동화 시나리오 강제 실행 (소리는 부스 화면에서 납니다)
             </h4>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={() => void onSimulateWarning()}
-                disabled={!isAdmin}
-                className="px-3 py-2 rounded-lg bg-raised/80 hover:bg-raised/90 border border-line-strong text-xs font-medium text-brass flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                disabled={!isAdmin || isEnding}
+                className="px-3 py-2 rounded-lg bg-raised/80 hover:bg-raised/90 border border-line-strong text-xs font-medium text-brass flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <AlertTriangle className="w-4 h-4 text-brass" />
                 종료 10분 전 (LED 깜빡임)
               </button>
+
               <button
-                onClick={() => void onSimulateEnd()}
-                disabled={!isAdmin}
-                className="px-3 py-2 rounded-lg bg-raised/80 hover:bg-raised/90 border border-line-strong text-xs font-medium text-live flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                onClick={() => void handleSimulateEnd()}
+                disabled={!isAdmin || isEnding}
+                aria-busy={isEnding}
+                className="px-3 py-2 rounded-lg bg-raised/80 hover:bg-raised/90 border border-line-strong text-xs font-medium text-live flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PlayCircle className="w-4 h-4 text-live" />
-                이용 종료 (퇴실곡+전원차단)
+                {isEnding ? "이용 종료 처리 중..." : "이용 종료 (퇴실곡+전원차단)"}
               </button>
             </div>
           </div>
@@ -277,23 +313,34 @@ export function VirtualBoothSimulator({
           {/* Closing Song Player Banner */}
           <div className="p-3.5 rounded-xl bg-canvas/80 border border-brass/30 flex items-center justify-between gap-3 shadow-inner">
             <div className="flex items-center gap-3 min-w-0">
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isPlayingClosingAudio ? "bg-brass/20 text-brass animate-pulse" : "bg-raised text-ink-3"}`}>
+              <div
+                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                  isPlayingClosingAudio
+                    ? "bg-brass/20 text-brass animate-pulse"
+                    : "bg-raised text-ink-3"
+                }`}
+              >
                 <Music className="w-5 h-5" />
               </div>
+
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-ink-2 truncate">더윈드(The Wind) - 다시 만나</span>
+                  <span className="text-xs font-bold text-ink-2 truncate">
+                    더윈드(The Wind) - 다시 만나
+                  </span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-brass/20 text-brass font-mono">
                     퇴실곡 (0:58~)
                   </span>
                 </div>
+
                 <p className="text-[11px] text-ink-3 truncate">
                   {isPlayingClosingAudio
-                    ? "🎵 이 노트북에서 미리 듣는 중"
+                    ? "이 노트북에서 미리 듣는 중"
                     : "이용이 끝나면 부스 화면이 안내 후 틀어 줍니다"}
                 </p>
               </div>
             </div>
+
             <button
               onClick={toggleClosingSong}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
@@ -319,47 +366,58 @@ export function VirtualBoothSimulator({
           {/* Manual Device Toggle Controls */}
           <div className="grid grid-cols-2 gap-3 pt-2">
             <button
-              onClick={() => onDeviceControl("door_lock_1", isDoorUnlocked ? "locked" : "unlocked")}
+              onClick={() =>
+                onDeviceControl(
+                  "door_lock_1",
+                  isDoorUnlocked ? "locked" : "unlocked"
+                )
+              }
               disabled={!isAdmin}
               className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 isDoorUnlocked
                   ? "bg-free-soft/30 border-free/50 text-free"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              {isDoorUnlocked ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              {isDoorUnlocked ? (
+                <Unlock className="w-4 h-4" />
+              ) : (
+                <Lock className="w-4 h-4" />
+              )}
               도어락 {isDoorUnlocked ? "수동 잠금" : "수동 해제"}
             </button>
 
             <button
-              onClick={() => onDeviceControl("relay_1", isPowerOn ? "off" : "on")}
+              onClick={() =>
+                onDeviceControl("relay_1", isPowerOn ? "off" : "on")
+              }
               disabled={!isAdmin}
               className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 isPowerOn
                   ? "bg-brass-soft/30 border-brass/50 text-brass"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Power className="w-4 h-4" />
               릴레이 전원 {isPowerOn ? "끄기" : "켜기"}
             </button>
 
             <button
-              onClick={() => onDeviceControl("led_1", isLedOn ? "off" : "on")}
+              onClick={() =>
+                onDeviceControl("led_1", isLedOn ? "off" : "on")
+              }
               disabled={!isAdmin}
               className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 isLedOn
                   ? "bg-brass-soft/30 border-brass/50 text-brass"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
-              }`}
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Lightbulb className="w-4 h-4" />
               조명 {isLedOn ? "끄기" : "켜기"}
             </button>
 
-            {/* 누를 때마다 부스 화면(/booth)이 이 문장을 읽는다. 안내 방송이 나갈 때마다
-                스피커 상태가 "재생"으로 남아 있어서, 켜고 끄는 버튼이면 대부분
-                [정지]로 보였다 — 한 번 누르면 한 번 읽는 점검 버튼으로 둔다. */}
+            {/* 누를 때마다 부스 화면(/booth)이 이 문장을 읽는다. */}
             <button
               onClick={() =>
                 onDeviceControl("speaker_1", "playing", {
@@ -368,7 +426,7 @@ export function VirtualBoothSimulator({
               }
               title="부스 화면(/booth)이 이 문장을 읽습니다 — 부스 스피커 점검용"
               disabled={!isAdmin}
-              className="p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
+              className="p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-raised/50 border-line-strong text-ink-3 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Volume2 className="w-4 h-4" />
               스피커 테스트
@@ -376,7 +434,8 @@ export function VirtualBoothSimulator({
           </div>
 
           <p className="text-[11px] text-ink-3 leading-relaxed border-t border-line/80 pt-3">
-            비밀번호 키패드와 안내 음성·퇴실곡은 <strong className="text-ink-2">부스 화면(/booth)</strong>에
+            비밀번호 키패드와 안내 음성·퇴실곡은{" "}
+            <strong className="text-ink-2">부스 화면(/booth)</strong>에
             있습니다. 예약 목록의 [대신 입력]으로 학생 대신 인증할 수도 있습니다.
           </p>
         </div>

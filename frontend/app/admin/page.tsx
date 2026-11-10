@@ -1,8 +1,14 @@
+
 "use client";
 
-import React, { useCallback, useSyncExternalStore } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
-import { Monitor, Home } from "lucide-react";
+import { Monitor, Home, RefreshCw } from "lucide-react";
 
 import { AppHeader } from "@/components/layout/AppHeader";
 import { AdminGate } from "@/components/booth/AdminGate";
@@ -12,7 +18,6 @@ import { SongHistorySection } from "@/components/booth/SongHistorySection";
 import { VideoCheckPanel } from "@/components/booth/VideoCheckPanel";
 import { OpsSummary } from "@/components/admin/OpsSummary";
 import { SchedulerPanel } from "@/components/admin/SchedulerPanel";
-import { QueuePanel } from "@/components/admin/QueuePanel";
 import { AnthemRankingPanel } from "@/components/admin/AnthemRankingPanel";
 import { useBoothData } from "@/hooks/useBoothData";
 import { apiUrl } from "@/utils/apiConfig";
@@ -25,19 +30,7 @@ import {
 } from "@/utils/adminSession";
 
 /**
- * `/admin` — 선생님 노트북 화면 (부록G §3-2)
- *
- * 부스를 실제로 움직이는 조작은 전부 여기에만 둔다. 도어락 해제, 220V 전원
- * 차단, 이용 강제 종료가 관람객 화면에 있으면 남이 노래하는 중에 전원이 꺼질 수
- * 있기 때문이다.
- *
- * 인증 전에는 제어 화면을 **비활성화하는 게 아니라 아예 그리지 않는다.**
- * disabled 로 막으면 무엇이 있는지는 다 보이고, 버튼만 못 누르는 상태가 된다.
- *
- * 이 화면은 선생님 노트북에서 본다. 그래서 여기에는
- *   - 비밀번호 키패드가 없다 — 비밀번호는 부스 앞에서 누른다 (/booth 화면 키패드)
- *   - 소리가 나지 않는다 — 안내 음성과 퇴실곡은 부스 화면이 낸다
- * 학생 대신 인증해야 할 때는 예약 목록의 [대신 입력]을 쓴다.
+ * `/admin` — 선생님 노트북 화면
  */
 export default function AdminPage() {
   const {
@@ -57,11 +50,196 @@ export default function AdminPage() {
     getAdminServerSnapshot
   );
 
-  /** 관리자 토큰이 만료됐을 때 공통 처리 — 세션을 비우고 다시 인증하게 한다 */
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(
+    null
+  );
+  const [isExtending, setIsExtending] = useState(false);
+
+  /** 관리자 토큰이 만료됐을 때 공통 처리 */
   const handleExpired = useCallback(() => {
     clearAdminSession();
+    setRemainingSeconds(null);
     alert("관리자 인증이 만료되었습니다. 관리자 PIN으로 다시 인증해 주세요.");
   }, []);
+
+  /**
+   * 관리자 세션 조회
+   *
+   * 최초 조회에 실패하면 1.5초 뒤 다시 조회한다.
+   * 네트워크가 일시적으로 불안정해도 카운트다운이 멈춰 있는 상황을 방지한다.
+   */
+  useEffect(() => {
+    if (!adminAuthed) {
+      setRemainingSeconds(null);
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: number | null = null;
+
+    const checkSession = async () => {
+      try {
+        const res = await adminFetch("/api/admin/session", {
+          method: "GET",
+        });
+
+        if (cancelled) return;
+
+        if (res.status === 401) {
+          handleExpired();
+          return;
+        }
+
+        if (!res.ok) {
+          console.error(
+            "관리자 세션 조회 실패:",
+            res.status,
+            res.statusText
+          );
+
+          retryTimer = window.setTimeout(checkSession, 1500);
+          return;
+        }
+
+        const data = await res.json().catch(() => null);
+
+        if (cancelled) return;
+
+        if (!data?.data?.valid) {
+          handleExpired();
+          return;
+        }
+
+        const seconds = Number(data.data.remaining_seconds);
+
+        if (!Number.isFinite(seconds) || seconds < 0) {
+          console.error("관리자 세션 남은 시간 응답이 올바르지 않습니다:", data);
+
+          retryTimer = window.setTimeout(checkSession, 1500);
+          return;
+        }
+
+        if (seconds === 0) {
+          handleExpired();
+          return;
+        }
+
+        setRemainingSeconds(Math.ceil(seconds));
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("관리자 세션 확인 오류:", error);
+
+        // 일시적인 서버 연결 오류라면 다시 조회한다.
+        retryTimer = window.setTimeout(checkSession, 1500);
+      }
+    };
+
+    checkSession();
+
+    return () => {
+      cancelled = true;
+
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [adminAuthed, handleExpired]);
+
+  /**
+   * 남은 시간 카운트다운
+   *
+   * remainingSeconds가 null에서 숫자로 바뀌면 타이머를 시작한다.
+   * 매초 숫자가 바뀌더라도 타이머를 재생성하지 않는다.
+   */
+  useEffect(() => {
+    if (!adminAuthed || remainingSeconds === null) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setRemainingSeconds((current) => {
+        if (current === null) return null;
+
+        return Math.max(0, current - 1);
+      });
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [adminAuthed, remainingSeconds !== null]);
+
+  /**
+   * 남은 시간이 0초가 되면 관리자 인증을 만료 처리한다.
+   */
+  useEffect(() => {
+    if (adminAuthed && remainingSeconds === 0) {
+      handleExpired();
+    }
+  }, [adminAuthed, remainingSeconds, handleExpired]);
+
+  /**
+   * 관리자 세션 1시간 연장
+   * 기존 토큰을 사용하며 새로운 토큰을 발급하지 않는다.
+   */
+  const handleExtendSession = useCallback(async () => {
+    if (isExtending) return;
+
+    setIsExtending(true);
+
+    try {
+      const res = await adminFetch("/api/admin/session/extend", {
+        method: "POST",
+      });
+
+      if (res.status === 401) {
+        handleExpired();
+        return;
+      }
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const message =
+          data?.detail?.message ||
+          data?.error?.message ||
+          "관리자 세션 연장에 실패했습니다.";
+
+        alert(message);
+        return;
+      }
+
+      const newRemainingSeconds = Number(
+        data?.data?.remaining_seconds ?? data?.data?.expires_in
+      );
+
+      if (!Number.isFinite(newRemainingSeconds) || newRemainingSeconds <= 0) {
+        alert("세션 연장 응답이 올바르지 않습니다.");
+        return;
+      }
+
+      setRemainingSeconds(newRemainingSeconds);
+      alert("관리자 세션이 1시간 연장되었습니다.");
+    } catch (error) {
+      console.error("관리자 세션 연장 오류:", error);
+      alert("서버 연결에 실패했습니다. 세션 연장 여부를 확인해 주세요.");
+    } finally {
+      setIsExtending(false);
+    }
+  }, [isExtending, handleExpired]);
+
+  /** 남은 시간을 MM:SS 형식으로 표시 */
+  const formatRemainingTime = (seconds: number | null) => {
+    if (seconds === null) return "--:--";
+
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+
+    return `${String(minutes).padStart(2, "0")}:${String(
+      remaining
+    ).padStart(2, "0")}`;
+  };
 
   const handleDeviceControl = useCallback(
     async (deviceId: string, state: string, value?: unknown) => {
@@ -71,38 +249,101 @@ export default function AdminPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ desired_state: state, value }),
         });
+
         if (res.status === 401) {
           handleExpired();
           return;
         }
-        fetchDevices();
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          const message =
+            data?.error?.message ||
+            data?.detail?.message ||
+            data?.detail ||
+            "기기 제어 요청에 실패했습니다.";
+
+          alert(
+            typeof message === "string"
+              ? message
+              : JSON.stringify(message)
+          );
+          return;
+        }
+
+        await fetchDevices();
       } catch (e) {
-        console.error(e);
+        console.error("기기 제어 오류:", e);
+        alert("서버 연결에 실패했습니다. 네트워크 상태를 확인해 주세요.");
       }
     },
     [fetchDevices, handleExpired]
   );
 
-  /** 시나리오 강제 실행 3종은 호출 경로가 같아 하나로 묶는다 */
+  /** 시나리오 강제 실행 3종 */
   const runScenario = useCallback(
     async (path: string) => {
+      const isEndScenario = path === "/api/booth/simulate-end";
+
       try {
         const res = await adminFetch(path, { method: "POST" });
+
         if (res.status === 401) {
           handleExpired();
           return;
         }
-        fetchDevices();
+
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || data?.data?.success === false) {
+          const detail = data?.detail;
+
+          const message =
+            data?.error?.message ||
+            data?.data?.message ||
+            (typeof detail === "string"
+              ? detail
+              : detail?.message ||
+                detail?.error?.message ||
+                (detail ? JSON.stringify(detail) : null)) ||
+            data?.message ||
+            "시나리오 실행에 실패했습니다.";
+
+          console.error("시나리오 실행 실패:", {
+            path,
+            status: res.status,
+            response: data,
+          });
+
+          alert(message);
+          return;
+        }
+
+        if (!isEndScenario) {
+          await fetchDevices();
+        }
       } catch (e) {
-        console.error(e);
+        console.error("시나리오 실행 오류:", e);
+
+        alert(
+          isEndScenario
+            ? "종료 요청 중 서버 연결에 실패했습니다. 실제 기기와 예약 상태를 다시 확인해 주세요."
+            : "서버 연결에 실패했습니다. 시나리오 실행 결과를 확인해 주세요."
+        );
+      } finally {
+        if (isEndScenario) {
+          await Promise.all([
+            fetchDevices(),
+            fetchReservations(),
+          ]);
+        }
       }
     },
-    [fetchDevices, handleExpired]
+    [fetchDevices, fetchReservations, handleExpired]
   );
 
   /**
-   * [대신 입력] — 학생 대신 부스 키패드에 PIN 을 넣는다.
-   * 키패드와 같은 경로라 관리자 토큰을 붙이지 않고, 예약 시간 검사도 그대로 받는다.
+   * [대신 입력] — 학생 대신 부스 키패드에 PIN을 넣는다.
    */
   const handleRemoteEntry = useCallback(
     async (pin: string) => {
@@ -112,16 +353,22 @@ export default function AdminPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pin }),
         });
-        const data = await res.json();
+
+        const data = await res.json().catch(() => null);
+
         fetchDevices();
         fetchReservations();
+
         return {
           success: res.ok,
-          mode: data.data?.mode,
-          message: data.data?.message || data.error?.message,
+          mode: data?.data?.mode,
+          message: data?.data?.message || data?.error?.message,
         };
       } catch {
-        return { success: false, message: "서버 연결에 실패했습니다." };
+        return {
+          success: false,
+          message: "서버 연결에 실패했습니다.",
+        };
       }
     },
     [fetchDevices, fetchReservations]
@@ -143,6 +390,7 @@ export default function AdminPage() {
               <Monitor className="w-3.5 h-3.5" />
               부스 화면
             </Link>
+
             <Link
               href="/"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-xs font-bold text-ink-2 transition-colors"
@@ -150,6 +398,25 @@ export default function AdminPage() {
               <Home className="w-3.5 h-3.5" />
               예약 화면
             </Link>
+
+            {adminAuthed && (
+              <button
+                type="button"
+                onClick={handleExtendSession}
+                disabled={isExtending}
+                title="관리자 세션을 1시간 연장합니다."
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-xs font-bold text-ink-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    isExtending ? "animate-spin" : ""
+                  }`}
+                />
+                {isExtending
+                  ? "연장 중..."
+                  : `세션 연장 ${formatRemainingTime(remainingSeconds)}`}
+              </button>
+            )}
           </div>
         }
       />
@@ -157,73 +424,56 @@ export default function AdminPage() {
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
         <AdminGate isAuthed={adminAuthed} />
 
-        {/*
-          인증 전에는 아래를 통째로 그리지 않는다.
-          화면을 나누는 것만으로는 부족하고, 백엔드도 X-Admin-Token 을 요구한다
-          (부록G §3-4) — 둘이 세트로 막는다.
-        */}
         {adminAuthed && (
           <>
-            {/*
-              1. 지금 무슨 일이 벌어지고 있나 — 선생님이 이 화면을 여는 이유다.
-                 예전에는 이 정보가 아래 시뮬레이터 카드 안의 작은 글자로 흩어져
-                 있어서, 상황 파악에 스크롤이 필요했다.
-            */}
             <OpsSummary
               devices={devices}
               reservations={reservations}
               isConnected={isConnected}
             />
 
-            {/*
-              2. 자동 운영 엔진 — 사람이 버튼을 누르지 않아도 도는 부분이다.
-                 '지금 무슨 일이 예정돼 있나'가 개입 도구보다 먼저 와야 한다.
-            */}
             <SchedulerPanel />
 
-            <QueuePanel />
-
-            {/* 축제 교가 부르기 대회 — 순위와 상품 배부 */}
             <AnthemRankingPanel />
 
-            {/* 3. 개입 — 기기 제어와 시나리오 강제 실행 */}
             <VirtualBoothSimulator
               devices={devices}
               onDeviceControl={handleDeviceControl}
-              onSimulateEntry={() => runScenario("/api/booth/simulate-entry")}
-              onSimulateWarning={() => runScenario("/api/booth/simulate-10min-warning")}
-              onSimulateEnd={() => runScenario("/api/booth/simulate-end")}
+              onSimulateEntry={() =>
+                runScenario("/api/booth/simulate-entry")
+              }
+              onSimulateWarning={() =>
+                runScenario("/api/booth/simulate-10min-warning")
+              }
+              onSimulateEnd={() =>
+                runScenario("/api/booth/simulate-end")
+              }
               lastEventMessage={lastEventMsg}
               isAdmin={adminAuthed}
             />
 
-            {/*
-              4. 예약 관리 — 여기서는 '현황 목록'이 일이다. 신청 폼은 관람객
-                 화면(`/`)의 몫이라 띄우지 않는다 (부록G §3-3).
-            */}
             <ReservationSection
               reservations={reservations}
               onReservationCreated={fetchReservations}
-              /* 학생이 비밀번호를 잃어버렸을 때·시연할 때 선생님이 대신 인증한다 */
               onRemoteEntry={handleRemoteEntry}
               sections="list"
             />
 
-            {/*
-              5. 준비 작업 — 노래방 영상 점검. 부스 화면(`/booth`)에 있던 것을
-                 옮겨 왔다. 전시 중 관람객이 보는 화면에 설정 도구가 있을 이유가
-                 없고, 영상 등록은 관리자 인증이 필요한 작업이다.
-            */}
             <VideoCheckPanel />
 
-            {/* 6. 기록 — 전체 노래 통계 (부스에서 부르고 채점한 곡이 쌓인다) */}
-            <SongHistorySection allSongs={allSongs} favoriteSongs={favoriteSongs} />
+            <SongHistorySection
+              allSongs={allSongs}
+              favoriteSongs={favoriteSongs}
+            />
           </>
         )}
       </main>
 
       <footer className="max-w-7xl mx-auto px-4 lg:px-8 py-8 mt-12 border-t border-line text-center text-xs text-ink-3 space-y-1">
-        <p>관리자 운영 화면 · 전시 전에 backend/.env 의 ADMIN_PIN 을 바꾸고 ALLOW_TEST_PIN 을 false 로 두세요</p>
+        <p>
+          관리자 운영 화면 · 전시 전에 backend/.env 의 ADMIN_PIN 을 바꾸고
+          ALLOW_TEST_PIN 을 false 로 두세요
+        </p>
       </footer>
     </div>
   );

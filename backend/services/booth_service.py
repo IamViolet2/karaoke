@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
 
 from auth import is_admin_pin
 from db import database as db
@@ -10,9 +10,8 @@ from websocket_manager import ws_manager
 
 logger = logging.getLogger("backend.services.booth")
 
-# 예약 없이 인증 흐름만 확인하고 싶을 때 쓰는 개발용 만능 PIN.
-# 이 값이 열려 있으면 예약하지 않은 사람도 부스에 들어올 수 있으므로
-# 기본은 꺼 두고, 로컬 개발에서만 .env로 켠다 (전시 환경에서는 절대 켜지 않는다).
+# 예약 없이 인증 흐름만 확인하고 싶을 때 사용하는 개발용 만능 PIN.
+# 기본은 꺼 두고, 로컬 개발에서만 .env로 활성화한다.
 TEST_PIN = "1234"
 
 
@@ -20,49 +19,9 @@ def _test_pin_allowed() -> bool:
     return os.getenv("ALLOW_TEST_PIN", "false").strip().lower() == "true"
 
 
-# 예약 PIN은 **그 예약의 이용 시간에만** 문을 연다 (팀 트리거 규칙:
-# "예약된 이용 시간에 따라 부스 전원과 장치를 자동 제어한다").
-# 예전에는 다음 주 예약의 PIN으로도 오늘 아무 때나 문이 열리고 220V가 들어갔다.
-# 그러면 스케줄러는 "오늘 예약"만 끄므로 전원이 꺼지지도 않았다.
-#
-# 개발 중에는 내일 예약을 만들고 바로 PIN을 시험해 봐야 하므로 끌 수 있게 둔다.
-def _time_check_enabled() -> bool:
-    return os.getenv("RESERVATION_TIME_CHECK", "true").strip().lower() != "false"
-
-
-_SLOT_LABELS = {"lunch": "점심", "dinner": "저녁"}
-_WEEKDAYS = "월화수목금토일"
-
-
-def _entry_window(reservation: Dict[str, Any]):
-    """그 예약으로 들어갈 수 있는 시각 구간 (시작 10분 전, 끝). 알 수 없으면 None.
-
-    계산은 스케줄러에 한 벌만 둔다 — 대기열(③)도 같은 시간표를 봐야 한다.
-    (스케줄러가 이 파일을 import 하므로 여기서는 함수 안에서 늦게 불러온다)
-    """
-    from services.scheduler import entry_window
-
-    return entry_window(reservation)
-
-
-def _describe_window(reservation: Dict[str, Any]) -> str:
-    window = _entry_window(reservation)
-    if not window:
-        return "예약한 시간"
-    opens, closes = window
-    slot = _SLOT_LABELS.get(str(reservation.get("time_slot")), "")
-    return (
-        f"{opens.month}월 {opens.day}일({_WEEKDAYS[opens.weekday()]}) {slot} "
-        f"{opens:%H:%M}~{closes:%H:%M}"
-    )
-
-
-# 부스 스피커가 읽어 줄 안내 문구 — 한곳에만 둔다.
-# 파이(SPEAKER_MODE=pi)는 speaker_1 의 message 를, 부스 화면(/booth)은 방송의
-# speech 를 읽는다. 둘이 다른 문장을 말하지 않도록 여기서 같이 가져다 쓴다.
+# 부스 스피커 안내 문구
 SPEECH_ADMIN = "관리자 모드로 인증되었습니다. 점검을 진행하세요."
 SPEECH_INVALID = "비밀번호가 맞지 않습니다. 다시 확인해 주세요."
-SPEECH_NOT_NOW = "아직 예약 시간이 아닙니다. 화면에 나온 시간에 다시 입력해 주세요."
 SPEECH_ENTRY = "부스에 입장하셨습니다. 즐거운 시간 되세요!"
 SPEECH_WARNING = "이용 종료 10분 전입니다. 다음 이용자를 위해 정리를 준비해 주세요."
 SPEECH_END = "이용 시간이 종료되었습니다. 퇴실해 주시기 바랍니다."
@@ -81,22 +40,44 @@ class BoothService:
     async def verify_and_trigger(pin_code: str) -> Dict[str, Any]:
         """
         4자리 키패드 비밀번호 검증 및 도어락/전원/LED/스피커 자동 제어
-        - 관리자 비번(.env의 ADMIN_PIN): 도어락 해제 + LED 점등 (노래방 전원 릴레이는 차단 유지)
-        - 예약자 OTP 비번: 도어락 해제 + 릴레이 전원 공급 + LED 점등 + 환영 음성
+
+        - 관리자 PIN: 도어락 해제 + LED 점등 (노래방 전원은 차단 유지)
+        - 예약 PIN: 예약 상태를 active로 변경하고 도어락/전원/LED 작동
+        - 예약 PIN은 예약 날짜나 시간대와 관계없이 즉시 사용 가능
+        - 예약 PIN은 인증 성공 후 재사용할 수 없음
         """
+
         provider = get_device_provider()
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        # 1. 관리자 고정 비밀번호 처리 (.env의 ADMIN_PIN)
+        # 1. 관리자 고정 비밀번호 처리
         if is_admin_pin(pin_code):
             logger.info("Admin PIN authenticated. Unlocking door and LED only.")
-            await provider.set_actuator_state("door_lock_1", "unlocked", operator="admin")
-            await provider.set_actuator_state("led_1", "on", {"mode": "admin", "brightness_pct": 100}, operator="admin")
-            await provider.set_actuator_state("relay_1", "off", operator="admin")
+
             await provider.set_actuator_state(
-                "speaker_1", "playing",
-                {"track": "admin_welcome", "message": SPEECH_ADMIN},
-                operator="admin"
+                "door_lock_1",
+                "unlocked",
+                operator="admin",
+            )
+            await provider.set_actuator_state(
+                "led_1",
+                "on",
+                {"mode": "admin", "brightness_pct": 100},
+                operator="admin",
+            )
+            await provider.set_actuator_state(
+                "relay_1",
+                "off",
+                operator="admin",
+            )
+            await provider.set_actuator_state(
+                "speaker_1",
+                "playing",
+                {
+                    "track": "admin_welcome",
+                    "message": SPEECH_ADMIN,
+                },
+                operator="admin",
             )
 
             event_msg = {
@@ -105,120 +86,143 @@ class BoothService:
                 "success": True,
                 "message": "관리자 인증 성공 — 도어락 해제 및 LED 점등 (기기 전원 제외)",
                 "speech": SPEECH_ADMIN,
-                "timestamp": now_str
+                "timestamp": now_str,
             }
+
             await ws_manager.broadcast(event_msg)
+
             return {
                 "success": True,
                 "mode": "admin",
-                "message": "관리자 모드로 인증되었습니다. (노래방 전원 제외, 도어락 및 LED 작동)"
+                "message": "관리자 모드로 인증되었습니다. (노래방 전원 제외, 도어락 및 LED 작동)",
             }
 
-        # 2. 학생 예약 일회성 비밀번호(OTP 4자리) 검증
-        #    PIN이 맞아도 **지금이 그 예약의 이용 시간**이어야 통과한다.
+        # 2. 학생 예약 일회성 PIN 검증
+        #
+        # 예약 날짜와 점심/저녁 시간대는 인증 조건으로 사용하지 않는다.
+        # 예약 상태가 reserved인 PIN만 조회하므로 인증 후 재사용도 차단된다.
         reservation = None
-        too_early_or_late = None
+
         try:
             candidates = db.get_reservations_by_pin(pin_code)
+
+            if candidates:
+                reservation = candidates[0]
+
         except Exception as exc:
-            logger.warning(f"DB lookup failed for PIN: {exc}")
+            logger.warning("Reservation lookup failed for PIN: %s", exc)
             candidates = []
 
-        if candidates and not _time_check_enabled():
-            reservation = candidates[0]
-        elif candidates:
-            from booth_time import now_local
+        # 3. 예약 PIN이 없으면 개발용 테스트 PIN 확인
+        #
+        # 기본적으로 비활성화되어 있으며,
+        # ALLOW_TEST_PIN=true일 때만 TEST_PIN을 허용한다.
+        is_test_user = (
+            reservation is None
+            and _test_pin_allowed()
+            and pin_code == TEST_PIN
+        )
 
-            now = now_local()
-            for r in candidates:
-                window = _entry_window(r)
-                if window and window[0] <= now < window[1]:
-                    reservation = r
-                    break
-            if not reservation:
-                too_early_or_late = candidates[0]
-
-        # 3. 전시 체험권 PIN 검증 (부록G §2-③)
-        #    전시장 관람객은 예약이 없다. 대신 QR로 받은 체험권을 쓴다.
-        #    '호출된(called)' 체험권만 통과한다 — 차례가 오지 않은 사람의 번호로
-        #    문이 열리면 줄을 선 의미가 없다.
-        ticket = None
-        if not reservation:
-            try:
-                ticket = db.get_called_ticket_by_pin(pin_code)
-            except Exception as exc:
-                logger.warning(f"DB lookup failed for queue ticket: {exc}")
-
-        # 예약 PIN은 맞지만 이용 시간이 아닐 때 — 틀린 비밀번호와는 다르게 알려 준다.
-        # (미리 온 학생이 "내 PIN이 틀렸나?" 하고 계속 누르지 않게)
-        if not reservation and not ticket and too_early_or_late:
-            when = _describe_window(too_early_or_late)
-            # 키패드 앞 학생은 부스 화면으로 이 안내를 본다 — 언제 오면 되는지까지 알려 준다.
-            # (숫자는 싣지 않는다. 예약 날짜·시간대는 원래 공개된 정보다)
-            await ws_manager.broadcast({
-                "type": "booth_auth",
-                "success": False,
-                "message": f"아직 예약 시간이 아닙니다 — {when}에 다시 입력해 주세요.",
-                "reason": "not_now",
-                "speech": SPEECH_NOT_NOW,
-                "timestamp": now_str
-            })
-            return {
-                "success": False,
-                "mode": "none",
-                "reason": "not_now",
-                "message": f"지금은 예약 시간이 아닙니다. 이 비밀번호는 {when}에 쓸 수 있습니다."
-            }
-
-        # 예약도 체험권도 없을 때만 개발용 만능 PIN을 인정한다 (기본은 차단)
-        if not reservation and not ticket and not (_test_pin_allowed() and pin_code == TEST_PIN):
-            # ⚠️ 입력한 숫자는 방송하지 않는다. 이 메시지는 부스 대형 화면과 관람객
-            #    폰에도 간다 — 한 자리만 틀린 관리자 PIN이 그대로 노출될 수 있다.
+        if not reservation and not is_test_user:
             event_msg = {
                 "type": "booth_auth",
                 "success": False,
                 "message": "비밀번호 불일치 — 인증에 실패하였습니다.",
                 "reason": "invalid",
                 "speech": SPEECH_INVALID,
-                "timestamp": now_str
+                "timestamp": now_str,
             }
+
             await ws_manager.broadcast(event_msg)
+
             return {
                 "success": False,
                 "mode": "none",
                 "reason": "invalid",
-                "message": "등록되지 않았거나 아직 차례가 아닌 비밀번호입니다. (예약 PIN은 1회용이고, 체험권은 호출된 뒤에만 쓸 수 있습니다)"
+                "message": "등록되지 않았거나 이미 사용된 비밀번호입니다. 예약 PIN은 1회용입니다.",
             }
 
+        # 4. 사용자 이름 결정
         if reservation:
             user_name = reservation.get("student_name", "학생")
-        elif ticket:
-            user_name = f"{ticket.get('ticket_no')}번 {ticket.get('nickname', '관람객')}"
         else:
             user_name = "테스트 학생"
-        logger.info(f"Student reservation authenticated: {user_name}. Activating booth.")
 
+        logger.info(
+            "Reservation authenticated: %s. Activating booth.",
+            user_name,
+        )
+
+        # 5. 예약 상태를 active로 변경
+        #
+        # database.py의 update_reservation_status()가
+        # 최초 active 전환 시 started_at을 기록한다.
         if reservation and reservation.get("id"):
             try:
-                db.update_reservation_status(reservation["id"], "active")
-            except Exception as exc:
-                logger.warning(f"Failed to update reservation status: {exc}")
-        elif ticket and ticket.get("id"):
-            try:
-                from services import experience
+                updated = db.update_reservation_status(
+                    reservation["id"],
+                    "active",
+                )
 
-                await experience.start_ticket(ticket)
-            except Exception as exc:
-                logger.warning(f"Failed to start queue ticket: {exc}")
+                if not updated:
+                    logger.warning(
+                        "Reservation status was not updated: id=%s",
+                        reservation["id"],
+                    )
 
-        # 일반 사용자 정상 인증: 도어락 해제 + 전원 릴레이 공급 + LED 점등 + 환영음
-        await provider.set_actuator_state("door_lock_1", "unlocked", operator="user")
-        await provider.set_actuator_state("relay_1", "on", operator="user")
-        await provider.set_actuator_state("led_1", "on", {"mode": "normal", "brightness_pct": 100}, operator="user")
+                    return {
+                        "success": False,
+                        "mode": "none",
+                        "reason": "reservation_update_failed",
+                        "message": "예약 상태를 변경하지 못했습니다. 다시 시도해 주세요.",
+                    }
+
+            except Exception as exc:
+                logger.exception(
+                    "Failed to activate reservation: %s",
+                    exc,
+                )
+
+                return {
+                    "success": False,
+                    "mode": "none",
+                    "reason": "reservation_update_failed",
+                    "message": "예약 인증 처리 중 오류가 발생했습니다.",
+                }
+
+        # 6. 일반 사용자 정상 인증
+        #
+        # 도어락 해제 + 전원 릴레이 공급 + LED 점등 + 환영 음성
         await provider.set_actuator_state(
-            "speaker_1", "playing",
-            {"track": "welcome", "message": _welcome_speech(user_name)},
-            operator="user"
+            "door_lock_1",
+            "unlocked",
+            operator="user",
+        )
+
+        await provider.set_actuator_state(
+            "relay_1",
+            "on",
+            operator="user",
+        )
+
+        await provider.set_actuator_state(
+            "led_1",
+            "on",
+            {
+                "mode": "normal",
+                "brightness_pct": 100,
+            },
+            operator="user",
+        )
+
+        await provider.set_actuator_state(
+            "speaker_1",
+            "playing",
+            {
+                "track": "welcome",
+                "message": _welcome_speech(user_name),
+            },
+            operator="user",
         )
 
         event_msg = {
@@ -228,8 +232,9 @@ class BoothService:
             "user_name": user_name,
             "message": f"{user_name}님 인증 성공! 부스 전원 공급 및 도어락이 해제되었습니다.",
             "speech": _welcome_speech(user_name),
-            "timestamp": now_str
+            "timestamp": now_str,
         }
+
         await ws_manager.broadcast(event_msg)
 
         return {
@@ -237,7 +242,7 @@ class BoothService:
             "mode": "user",
             "user_name": user_name,
             "reservation": reservation,
-            "message": f"{user_name}님 인증 성공! 부스 전원과 도어락이 가동됩니다."
+            "message": f"{user_name}님 인증 성공! 부스 전원과 도어락이 가동됩니다.",
         }
 
     @staticmethod
@@ -246,21 +251,40 @@ class BoothService:
         사람 입장 감지(PIR 센서 또는 비전 감지) 시 트리거
         환영 안내 문구 및 오디오 출력
         """
+
         provider = get_device_provider()
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         # PIR 센서 상태 갱신
         try:
-            db.update_current_state("pir_1", "detected", {"detected": True})
-            db.log_sensor_reading("pir_1", value=1.0, unit="detection", value_json={"detected": True})
+            db.update_current_state(
+                "pir_1",
+                "detected",
+                {"detected": True},
+            )
+
+            db.log_sensor_reading(
+                "pir_1",
+                value=1.0,
+                unit="detection",
+                value_json={"detected": True},
+            )
+
         except Exception as exc:
-            logger.warning(f"DB log failed for entry trigger: {exc}")
+            logger.warning(
+                "DB log failed for entry trigger: %s",
+                exc,
+            )
 
         # 스피커 환영 메시지 송출
         await provider.set_actuator_state(
-            "speaker_1", "playing",
-            {"track": "entry_greeting", "message": SPEECH_ENTRY},
-            operator="device"
+            "speaker_1",
+            "playing",
+            {
+                "track": "entry_greeting",
+                "message": SPEECH_ENTRY,
+            },
+            operator="device",
         )
 
         event_msg = {
@@ -268,69 +292,184 @@ class BoothService:
             "event": "entry_detected",
             "message": "부스 사람 입장 감지 — 환영 안내 음성을 송출합니다.",
             "speech": SPEECH_ENTRY,
-            "timestamp": now_str
+            "timestamp": now_str,
         }
+
         await ws_manager.broadcast(event_msg)
-        return {"recorded": True, "message": "환영 안내가 출력되었습니다."}
+
+        return {
+            "recorded": True,
+            "message": "환영 안내가 출력되었습니다.",
+        }
 
     @staticmethod
     async def trigger_10min_warning() -> Dict[str, Any]:
         """
-        이용 종료 10분 전 트리거: LED 깜빡임 알림 및 사전 안내
+        이용 종료 전 트리거:
+        LED 깜빡임 알림 및 사전 안내
+
+        실제 경고 시점은 scheduler.py 설정에 따라 결정된다.
         """
+
         provider = get_device_provider()
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        # LED 깜빡임 모드로 변경
-        await provider.set_actuator_state("led_1", "blink", {"mode": "warning_blink"}, operator="system")
         await provider.set_actuator_state(
-            "speaker_1", "playing",
-            {"track": "warning_10m", "message": SPEECH_WARNING},
-            operator="system"
+            "led_1",
+            "blink",
+            {"mode": "warning_blink"},
+            operator="system",
+        )
+
+        await provider.set_actuator_state(
+            "speaker_1",
+            "playing",
+            {
+                "track": "warning_10m",
+                "message": SPEECH_WARNING,
+            },
+            operator="system",
         )
 
         event_msg = {
             "type": "booth_event",
             "event": "10min_warning",
-            "message": "이용 종료 10분 전 — LED 조명이 깜빡이며 종료 알림을 표시합니다.",
+            "message": "이용 종료 전 — LED 조명이 깜빡이며 종료 알림을 표시합니다.",
             "speech": SPEECH_WARNING,
-            "timestamp": now_str
+            "timestamp": now_str,
         }
+
         await ws_manager.broadcast(event_msg)
-        return {"recorded": True, "message": "10분 전 알림이 작동되었습니다."}
+
+        return {
+            "recorded": True,
+            "message": "이용 종료 사전 알림이 작동되었습니다.",
+        }
 
     @staticmethod
     async def trigger_session_end() -> Dict[str, Any]:
         """
         이용 종료 트리거:
-        1. 지정 종료 음악 ('더윈드 - 다시 만나' 하이라이트 0:58~) 재생
-        2. 전원 릴레이 차단, 마이크 차단, 도어락 잠금, LED 소등
+        1. 지정 종료 음악 재생
+        2. 전원 릴레이 차단
+        3. 도어락 잠금
+        4. LED 소등
+
+        각 장치 명령을 독립적으로 실행한다.
+        특정 장치가 실패하더라도 나머지 종료 명령은 계속 실행한다.
         """
+
         provider = get_device_provider()
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        # 1. 종료곡 송출
-        await provider.set_actuator_state(
-            "speaker_1", "playing",
+        device_commands = [
             {
-                "track": "더윈드 - 다시 만나 (0:58~)",
-                "message": SPEECH_END
+                "device_id": "speaker_1",
+                "state": "playing",
+                "value": {
+                    "track": "더윈드 - 다시 만나 (0:58~)",
+                    "message": SPEECH_END,
+                },
             },
-            operator="system"
-        )
+            {
+                "device_id": "relay_1",
+                "state": "off",
+                "value": None,
+            },
+            {
+                "device_id": "door_lock_1",
+                "state": "locked",
+                "value": None,
+            },
+            {
+                "device_id": "led_1",
+                "state": "off",
+                "value": None,
+            },
+        ]
 
-        # 2. 전원 및 마이크 차단, 도어락 잠금, 조명 소등
-        await provider.set_actuator_state("relay_1", "off", operator="system")
-        await provider.set_actuator_state("door_lock_1", "locked", operator="system")
-        await provider.set_actuator_state("led_1", "off", operator="system")
+        results: Dict[str, Dict[str, Any]] = {}
+
+        for command in device_commands:
+            device_id = command["device_id"]
+
+            try:
+                if command["value"] is None:
+                    await provider.set_actuator_state(
+                        device_id,
+                        command["state"],
+                        operator="system",
+                    )
+                else:
+                    await provider.set_actuator_state(
+                        device_id,
+                        command["state"],
+                        command["value"],
+                        operator="system",
+                    )
+
+                results[device_id] = {
+                    "success": True,
+                    "message": "명령 실행 성공",
+                }
+
+                logger.info(
+                    "Session-end command succeeded: device=%s state=%s",
+                    device_id,
+                    command["state"],
+                )
+
+            except Exception as exc:
+                results[device_id] = {
+                    "success": False,
+                    "message": str(exc),
+                }
+
+                logger.exception(
+                    "Session-end command failed: device=%s",
+                    device_id,
+                )
+
+        failed_devices: List[str] = [
+            device_id
+            for device_id, result in results.items()
+            if not result["success"]
+        ]
+
+        all_success = len(failed_devices) == 0
+
+        if all_success:
+            message = (
+                "이용이 종료되어 종료 음악 재생, 전원 차단, "
+                "도어락 잠금 및 LED 소등이 완료되었습니다."
+            )
+        else:
+            message = (
+                "이용 종료 명령 중 일부가 실패했습니다. "
+                f"실패 장치: {', '.join(failed_devices)}"
+            )
 
         event_msg = {
             "type": "booth_event",
-            "event": "session_ended",
-            "message": "이용 종료 — 종료 음악('더윈드 - 다시 만나') 재생 후 전원 및 마이크를 차단했습니다.",
-            # 부스 화면은 이 문장을 읽은 뒤 퇴실곡을 튼다
+            "event": "session_ended" if all_success else "session_end_partial_failure",
+            "success": all_success,
+            "message": message,
             "speech": SPEECH_END,
-            "timestamp": now_str
+            "device_results": results,
+            "failed_devices": failed_devices,
+            "timestamp": now_str,
         }
-        await ws_manager.broadcast(event_msg)
-        return {"recorded": True, "message": "이용이 종료되어 기기 전원과 마이크가 차단되었습니다."}
+
+        # WebSocket 통신 실패가 장치 종료 결과를 덮어쓰지 않도록 별도 처리한다.
+        try:
+            await ws_manager.broadcast(event_msg)
+        except Exception:
+            logger.exception("Failed to broadcast session-end event.")
+
+        return {
+            "recorded": all_success,
+            "success": all_success,
+            "message": message,
+            "device_results": results,
+            "failed_devices": failed_devices,
+        }

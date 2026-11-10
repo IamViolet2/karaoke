@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 import time
+from math import ceil
 from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, status
@@ -11,12 +12,11 @@ logger = logging.getLogger("backend.auth")
 
 
 def _same_secret(given: str, expected: str) -> bool:
-    """두 비밀 문자열을 타이밍 공격에 안전하게 비교한다.
-
-    hmac.compare_digest 에 문자열을 그대로 넣으면 한글 같은 비ASCII 글자가
-    섞였을 때 TypeError 가 나서 500 오류가 된다. 바이트로 바꿔서 비교한다.
-    """
-    return hmac.compare_digest(given.encode("utf-8"), expected.encode("utf-8"))
+    """두 비밀 문자열을 타이밍 공격에 안전하게 비교한다."""
+    return hmac.compare_digest(
+        given.encode("utf-8"),
+        expected.encode("utf-8"),
+    )
 
 
 def verify_device_api_key(
@@ -24,20 +24,26 @@ def verify_device_api_key(
 ) -> str:
     """
     디바이스향(라즈베리파이, 비전 클라이언트) 엔드포인트 전용 인증 미들웨어.
-    X-Device-Api-Key 헤더를 .env의 DEVICE_API_KEY와 안전하게 비교(hmac.compare_digest)합니다.
     """
     server_key = os.getenv("DEVICE_API_KEY", "")
+
     if not server_key:
         logger.error("DEVICE_API_KEY is not configured in environment variables.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "SERVER_MISCONFIGURED", "message": "서버 인증 키가 설정되지 않았습니다."}
+            detail={
+                "code": "SERVER_MISCONFIGURED",
+                "message": "서버 인증 키가 설정되지 않았습니다.",
+            },
         )
 
     if not x_device_api_key or not _same_secret(x_device_api_key, server_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "INVALID_DEVICE_KEY", "message": "유효하지 않은 X-Device-Api-Key 입니다."}
+            detail={
+                "code": "INVALID_DEVICE_KEY",
+                "message": "유효하지 않은 X-Device-Api-Key 입니다.",
+            },
         )
 
     return x_device_api_key
@@ -48,97 +54,163 @@ def verify_user_auth(
 ) -> Dict[str, Any]:
     """
     사용자향(대시보드 프론트엔드) 엔드포인트 전용 인증 미들웨어.
-    Supabase Auth JWT 검증을 수행하며, 로컬 개발 단계(미설정 시)에서는 개발 세션을 지원합니다.
-    디바이스 API 키와는 엄격히 분리되어 동작합니다.
     """
-    # ⚠️ 예전에는 SUPABASE_URL이 채워졌는지로 이 검사를 켰다.
-    #    그런데 Supabase는 "로그인 서비스"가 아니라 "DB"로만 쓸 수도 있다.
-    #    (전시회 구성이 그렇다 — 관람객은 로그인 없이 예약만 한다)
-    #    그 상태에서 DB 접속용으로 SUPABASE_URL만 넣으면 대시보드 요청이
-    #    전부 401이 되어 버렸다. 그래서 "인증을 요구할지"를 별도 플래그로 뺀다.
-    require_auth = os.getenv("REQUIRE_USER_AUTH", "false").strip().lower() == "true"
+    require_auth = (
+        os.getenv("REQUIRE_USER_AUTH", "false").strip().lower() == "true"
+    )
 
     if require_auth:
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "MISSING_TOKEN", "message": "Authorization Bearer 토큰이 필요합니다."}
+                detail={
+                    "code": "MISSING_TOKEN",
+                    "message": "Authorization Bearer 토큰이 필요합니다.",
+                },
             )
-        # 추후 Supabase JWT 서명 검증 로직 (db-migration 스킬 연동)
-        token = authorization.split(" ")[1]
-        return {"sub": "authenticated_user", "token": token, "role": "authenticated"}
 
-    # 기본값: 익명 허용.
-    # 관리자만 쓸 수 있어야 하는 엔드포인트는 이것 대신 verify_admin_token을 건다.
+        # 추후 Supabase JWT 서명 검증 로직
+        token = authorization.split(" ")[1]
+        return {
+            "sub": "authenticated_user",
+            "token": token,
+            "role": "authenticated",
+        }
+
     return {"sub": "anonymous", "role": "anonymous"}
 
 
 # ==============================================================================
-# 관리자 인증 (부록G §3-4)
-#
-# 지금까지는 도어락/전원 제어와 시나리오 강제 실행이 아무 인증 없이 열려 있었다.
-# 화면에서 버튼을 숨겨도 URL을 직접 호출하면 그만이라, 엔드포인트 자체를 막는다.
-#
-# 학교 프로젝트 규모에 맞춰 로그인/회원가입 대신 **관리자 PIN → 단기 토큰**
-# 방식만 쓴다. 토큰은 서버 메모리에만 두므로 백엔드를 재시작하면 모두 만료된다.
+# 관리자 인증
 # ==============================================================================
 
-# 관리자 PIN은 코드에 박지 않고 .env로 뺀다 (.agents/rules/security-rules.md).
-# 기본값은 AGENTS.md에 적힌 팀 규칙값이지만, 저장소를 본 사람은 누구나 아는
-# 값이므로 전시 전에 반드시 .env에서 바꿔야 한다.
 DEFAULT_ADMIN_PIN = "9179"
 
-# 관리자 세션 유지 시간(초). 선생님이 자리를 비웠을 때 방치되지 않도록 짧게 둔다.
-ADMIN_TOKEN_TTL_SEC = int(os.getenv("ADMIN_TOKEN_TTL_SEC", "3600"))
+# 관리자 세션 유지 시간(초)
+_DEFAULT_ADMIN_TOKEN_TTL_SEC = 3600
 
-# {토큰: 만료시각(epoch)} — 프로세스 메모리에만 존재한다
+
+def _get_admin_token_ttl() -> int:
+    """관리자 토큰 TTL을 읽고 유효하지 않으면 기본값을 사용한다."""
+    raw_ttl = os.getenv(
+        "ADMIN_TOKEN_TTL_SEC",
+        str(_DEFAULT_ADMIN_TOKEN_TTL_SEC),
+    ).strip()
+
+    try:
+        ttl = int(raw_ttl)
+        if ttl <= 0:
+            raise ValueError("TTL must be greater than zero")
+        return ttl
+    except (TypeError, ValueError):
+        logger.warning(
+            "ADMIN_TOKEN_TTL_SEC 설정이 올바르지 않습니다. "
+            "기본값 3600초(1시간)를 사용합니다."
+        )
+        return _DEFAULT_ADMIN_TOKEN_TTL_SEC
+
+
+ADMIN_TOKEN_TTL_SEC = _get_admin_token_ttl()
+
+# {토큰: 만료시각(epoch)}
 _admin_tokens: Dict[str, float] = {}
 
 
 def get_admin_pin() -> str:
-    """.env의 ADMIN_PIN을 반환합니다. 미설정 시 기본값을 쓰고 경고를 남깁니다."""
+    """.env의 ADMIN_PIN을 반환한다."""
     pin = os.getenv("ADMIN_PIN", "").strip()
+
     if not pin:
         logger.warning(
             "ADMIN_PIN이 .env에 없어 기본값을 사용합니다. "
             "이 값은 저장소에 공개되어 있으니 전시 전에 반드시 변경하세요."
         )
         return DEFAULT_ADMIN_PIN
+
     return pin
 
 
 def is_admin_pin(pin: str) -> bool:
-    """입력 PIN이 관리자 PIN인지 타이밍 공격에 안전하게 비교합니다."""
+    """입력 PIN이 관리자 PIN인지 안전하게 비교한다."""
     return _same_secret(pin, get_admin_pin())
 
 
 def issue_admin_token() -> Dict[str, Any]:
-    """관리자 PIN 인증에 성공했을 때 단기 토큰을 발급합니다."""
+    """관리자 PIN 인증에 성공했을 때 단기 토큰을 발급한다."""
     _purge_expired_tokens()
+
     token = secrets.token_urlsafe(32)
     _admin_tokens[token] = time.time() + ADMIN_TOKEN_TTL_SEC
-    return {"token": token, "expires_in": ADMIN_TOKEN_TTL_SEC}
+
+    return {
+        "token": token,
+        "expires_in": ADMIN_TOKEN_TTL_SEC,
+    }
 
 
 def revoke_admin_token(token: str) -> None:
-    """로그아웃 — 토큰을 즉시 폐기합니다."""
+    """로그아웃 — 토큰을 즉시 폐기한다."""
     _admin_tokens.pop(token, None)
 
 
 def _purge_expired_tokens() -> None:
+    """만료된 토큰을 저장소에서 제거한다."""
     now = time.time()
-    for tok in [t for t, exp in _admin_tokens.items() if exp <= now]:
-        _admin_tokens.pop(tok, None)
+
+    expired_tokens = [
+        token
+        for token, expires_at in _admin_tokens.items()
+        if expires_at <= now
+    ]
+
+    for token in expired_tokens:
+        _admin_tokens.pop(token, None)
+
+
+def get_admin_token_remaining_seconds(token: Optional[str]) -> int:
+    """유효한 관리자 토큰의 남은 시간을 초 단위로 반환한다."""
+    if not token:
+        return 0
+
+    _purge_expired_tokens()
+
+    expires_at = _admin_tokens.get(token)
+    if expires_at is None:
+        return 0
+
+    return max(0, ceil(expires_at - time.time()))
+
+
+def extend_admin_token(token: str) -> Dict[str, int]:
+    """
+    유효한 관리자 토큰의 만료 시간을 현재 시점부터 다시 1시간(설정 TTL)으로 갱신한다.
+
+    만료되었거나 존재하지 않는 토큰은 연장하지 않는다.
+    """
+    _purge_expired_tokens()
+
+    if token not in _admin_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "ADMIN_AUTH_REQUIRED",
+                "message": "관리자 인증이 만료되었습니다. 다시 인증해 주세요.",
+            },
+        )
+
+    _admin_tokens[token] = time.time() + ADMIN_TOKEN_TTL_SEC
+
+    return {
+        "expires_in": ADMIN_TOKEN_TTL_SEC,
+        "remaining_seconds": ADMIN_TOKEN_TTL_SEC,
+    }
 
 
 def is_valid_admin_token(token: Optional[str]) -> bool:
-    """토큰이 살아 있는 관리자 토큰인지 조용히 확인합니다 (막지 않는다).
-
-    "관리자면 조금 더 보여 주되, 아니어도 거절하지는 않는" 화면에 쓴다.
-    아예 막아야 하는 곳에는 아래 verify_admin_token 을 Depends 로 건다.
-    """
+    """토큰이 살아 있는 관리자 토큰인지 확인한다."""
     if not token:
         return False
+
     _purge_expired_tokens()
     return token in _admin_tokens
 
@@ -146,19 +218,16 @@ def is_valid_admin_token(token: Optional[str]) -> bool:
 def verify_admin_token(
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token")
 ) -> str:
-    """
-    관리자 전용 엔드포인트(기기 제어, 시나리오 강제 실행) 인증 미들웨어.
-
-    학생·관람객이 쓰는 예약 신청, 키패드 인증, 노래 기록에는 걸지 않는다.
-    """
+    """관리자 전용 엔드포인트 인증 미들웨어."""
     _purge_expired_tokens()
+
     if not x_admin_token or x_admin_token not in _admin_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "code": "ADMIN_AUTH_REQUIRED",
-                "message": "관리자 인증이 필요합니다. 관리자 PIN으로 먼저 인증해 주세요."
-            }
+                "message": "관리자 인증이 필요합니다. 관리자 PIN으로 먼저 인증해 주세요.",
+            },
         )
-    return x_admin_token
 
+    return x_admin_token

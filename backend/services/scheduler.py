@@ -1,25 +1,18 @@
 """
-예약 시간 자동 운영 엔진 (부록G §2-① · ⑨)
+예약 자동 운영 엔진
 
-이 프로젝트의 하이라이트다. 지금까지 "종료 10분 전 알림"이나 "이용 종료"는
-관리자가 버튼을 눌러야만 일어났다. 사람이 시계를 보고 있어야 하는 시스템은
-'무인 자동화'라고 부를 수 없다.
+운영 모드:
+- production: 실제 운영 (점심 50분 / 저녁 60분)
+- demo: 발표 시연 (점심 3분 / 저녁 3분)
 
-이 모듈은 1분마다 깨어나 오늘 예약을 훑고, 시각이 되면 알아서 처리한다.
+주요 기능:
+- 실제 PIN 인증 시각(started_at)을 기준으로 이용시간 계산
+- 종료 전 LED 및 안내 음성
+- 이용 종료 시 퇴실곡 재생 및 전원·도어락 차단
+- 관리자 수동 이용 종료 처리
+- 예약 날짜와 관계없이 현재 이용 중인 예약 관리
 
-  예약 시작        → (사람이 4자리 PIN을 누르면 도어락·전원이 열린다)
-  시작 + 유예시간  → 아무도 안 들어왔으면 노쇼 처리 (⑨)
-  종료 10분 전     → LED 깜빡임 + 안내 음성
-  종료 시각        → 퇴실곡 재생 → 전원·도어락 차단, 예약 완료 처리
-
-⚠️ 전원을 켜는 것은 여기서 하지 않는다.
-   팀 트리거 규칙(AGENTS.md)이 "일회성 4자리 비밀번호 인증 성공 시 도어락을
-   해제하고 릴레이를 통해 전원을 공급한다"이기 때문이다. 시간이 됐다고 빈 부스에
-   220V를 넣어 두는 것은 안전하지도 않다. 엔진은 **끄는 쪽**을 책임진다.
-
-⚠️ 시간대(timezone)에 주의한다.
-   Render 같은 클라우드에 올리면 서버 시계가 UTC다. 그대로 두면 점심 타임이
-   새벽에 도는 일이 벌어진다. 그래서 항상 한국 시간으로 환산해서 판단한다.
+체험권 대기열 및 노쇼 자동 취소 기능은 사용하지 않는다.
 """
 
 import asyncio
@@ -31,53 +24,118 @@ from typing import Any, Dict, List, Optional
 from db import database as db
 from services.booth_service import BoothService
 from websocket_manager import ws_manager
+from booth_time import now_local, tz_name
+
 
 logger = logging.getLogger("backend.services.scheduler")
 
-# ── 타임슬롯 정의 ─────────────────────────────────────────────────────────
-# 프론트엔드(BoothStatusCard · ReservationSection)에 적힌 시간과 같아야 한다.
+
+# ── 환경변수 공통 함수 ────────────────────────────────────────────────────
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# ── 운영 모드 ─────────────────────────────────────────────────────────────
+
+MODE = os.getenv(
+    "SCHEDULER_MODE",
+    "production",
+).strip().lower()
+
+if MODE not in ("production", "demo"):
+    logger.warning(
+        "잘못된 SCHEDULER_MODE=%s. production 모드로 실행합니다.",
+        MODE,
+    )
+    MODE = "production"
+
+
+# ── 타임슬롯별 이용시간 ────────────────────────────────────────────────────
+
+PRODUCTION_DURATIONS = {
+    "lunch": 50 * 60,
+    "dinner": 60 * 60,
+}
+
+DEMO_DURATIONS = {
+    "lunch": 3 * 60,
+    "dinner": 3 * 60,
+}
+
+DURATIONS = (
+    DEMO_DURATIONS
+    if MODE == "demo"
+    else PRODUCTION_DURATIONS
+)
+
+
+# ── 프론트엔드 예약 시간대 ─────────────────────────────────────────────────
+
 SLOT_WINDOWS: Dict[str, tuple] = {
     "lunch": (dtime(12, 30), dtime(13, 20)),
     "dinner": (dtime(17, 30), dtime(18, 30)),
 }
 
-# ── 설정 ──────────────────────────────────────────────────────────────────
-def _int_env(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except ValueError:
-        return default
+
+# ── 실행 간격 및 종료 전 알림 ──────────────────────────────────────────────
+
+DEFAULT_INTERVAL = 1 if MODE == "demo" else 60
+
+INTERVAL_SEC = _int_env(
+    "SCHEDULER_INTERVAL_SEC",
+    DEFAULT_INTERVAL,
+)
+
+if MODE == "demo":
+    WARN_BEFORE_SEC = _int_env(
+        "SCHEDULER_DEMO_WARN_BEFORE_SEC",
+        30,
+    )
+else:
+    WARN_BEFORE_SEC = (
+        _int_env(
+            "SCHEDULER_WARN_BEFORE_MIN",
+            10,
+        ) * 60
+    )
+
+ENABLED = (
+    os.getenv(
+        "SCHEDULER_ENABLED",
+        "true",
+    ).strip().lower()
+    != "false"
+)
+
+WARN_WINDOW_SEC = max(
+    2,
+    INTERVAL_SEC * 2,
+)
 
 
-ENABLED = os.getenv("SCHEDULER_ENABLED", "true").strip().lower() != "false"
-INTERVAL_SEC = _int_env("SCHEDULER_INTERVAL_SEC", 60)
-WARN_BEFORE_MIN = _int_env("SCHEDULER_WARN_BEFORE_MIN", 10)
-NO_SHOW_GRACE_MIN = _int_env("SCHEDULER_NO_SHOW_GRACE_MIN", 15)
+# ── 실행 상태 ─────────────────────────────────────────────────────────────
 
-# 예약 PIN이 시작 몇 분 전부터 문을 여는가 (미리 와서 기다리는 학생). 0도 허용.
-try:
-    EARLY_ENTRY_MIN = max(0, int(os.getenv("RESERVATION_EARLY_ENTRY_MIN", "10")))
-except ValueError:
-    EARLY_ENTRY_MIN = 10
-
-# 경고를 쏘는 시간 창. 창을 좁게 두면, 서버가 그 사이에 재시작해도 중복 경고가
-# 나가지 않는다 (기억은 메모리에만 있어서 재시작하면 지워지기 때문이다).
-WARN_WINDOW_MIN = 2
-
-# 시간대 처리는 booth_time 한 곳에 둔다 — 대기열(③)도 같은 기준을 써야 한다.
-from booth_time import now_local, tz_name  # noqa: E402
-
-
-# ── 실행 상태 (관리자 화면에서 들여다본다) ───────────────────────────────
 _state: Dict[str, Any] = {
     "last_tick": None,
     "last_error": None,
-    "actions": [],       # 최근 처리 내역 (최신이 앞)
-    "warned_ids": set(),  # 이번 실행 중 10분 전 알림을 이미 보낸 예약
+    "actions": [],
+    "warned_ids": set(),
+    "ending_ids": set(),
 }
 
 
-def _remember(action: str, reservation: Dict[str, Any], message: str) -> Dict[str, Any]:
+# ── 공통 함수 ─────────────────────────────────────────────────────────────
+
+def _remember(
+    action: str,
+    reservation: Dict[str, Any],
+    message: str,
+) -> Dict[str, Any]:
+
     entry = {
         "action": action,
         "reservation_id": reservation.get("id"),
@@ -86,268 +144,653 @@ def _remember(action: str, reservation: Dict[str, Any], message: str) -> Dict[st
         "message": message,
         "at": now_local().isoformat(timespec="seconds"),
     }
-    _state["actions"] = ([entry] + _state["actions"])[:20]
-    logger.info(f"[scheduler] {action}: {message}")
+
+    _state["actions"] = (
+        [entry] + _state["actions"]
+    )[:20]
+
+    logger.info(
+        "[scheduler] %s: %s",
+        action,
+        message,
+    )
+
     return entry
 
 
-def slot_bounds(day: datetime, time_slot: str) -> Optional[tuple]:
-    """그 날짜의 타임슬롯 시작·종료 시각을 돌려준다."""
+def _duration_seconds(
+    time_slot: str,
+) -> Optional[int]:
+    """운영 모드에 따른 이용시간을 초 단위로 반환한다."""
+
+    return DURATIONS.get(time_slot)
+
+
+def _parse_started_at(
+    value: Any,
+) -> Optional[datetime]:
+    """
+    DB에 저장된 실제 입장 시각을 한국 시간 기준으로 변환한다.
+
+    started_at이 없는 예약은 임의의 예약 시간으로 대체하지 않는다.
+    """
+
+    if not value:
+        return None
+
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            text = str(value).strip()
+
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+
+            parsed = datetime.fromisoformat(text)
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(
+                tzinfo=now_local().tzinfo
+            )
+
+        return parsed.astimezone(
+            now_local().tzinfo
+        )
+
+    except (TypeError, ValueError):
+        logger.warning(
+            "잘못된 started_at 값: %s",
+            value,
+        )
+        return None
+
+
+def _get_active_reservations() -> List[Dict[str, Any]]:
+    """
+    날짜와 관계없이 현재 이용 중인 예약을 조회한다.
+
+    database.py에 get_active_reservations()가 있으면
+    해당 함수를 우선 사용한다.
+    """
+
+    if hasattr(db, "get_active_reservations"):
+        return db.get_active_reservations()
+
+    reservations = db.get_reservations(
+        limit=1000
+    )
+
+    return [
+        reservation
+        for reservation in reservations
+        if str(
+            reservation.get("status") or ""
+        ) == "active"
+    ]
+
+
+def _reservation_end(
+    reservation: Dict[str, Any],
+) -> Optional[datetime]:
+    """실제 입장 시각 + 운영 모드별 이용시간을 계산한다."""
+
+    started_at = _parse_started_at(
+        reservation.get("started_at")
+    )
+
+    if not started_at:
+        return None
+
+    duration = _duration_seconds(
+        str(
+            reservation.get("time_slot") or ""
+        )
+    )
+
+    if duration is None:
+        return None
+
+    return started_at + timedelta(
+        seconds=duration
+    )
+
+
+def slot_bounds(
+    day: datetime,
+    time_slot: str,
+) -> Optional[tuple]:
+    """예약 날짜의 예정된 시간대 시작·종료 시각을 반환한다."""
+
     window = SLOT_WINDOWS.get(time_slot)
+
     if not window:
         return None
-    start = datetime.combine(day.date(), window[0], tzinfo=day.tzinfo)
-    end = datetime.combine(day.date(), window[1], tzinfo=day.tzinfo)
+
+    start = datetime.combine(
+        day.date(),
+        window[0],
+        tzinfo=day.tzinfo,
+    )
+
+    end = datetime.combine(
+        day.date(),
+        window[1],
+        tzinfo=day.tzinfo,
+    )
+
     return start, end
 
 
-def entry_window(reservation: Dict[str, Any], tzinfo=None) -> Optional[tuple]:
-    """그 예약의 PIN이 문을 여는 시각 구간 (시작 EARLY_ENTRY_MIN분 전, 종료)."""
-    day_text = str(reservation.get("reservation_date") or "")[:10]
-    try:
-        day = datetime.strptime(day_text, "%Y-%m-%d").replace(tzinfo=tzinfo or now_local().tzinfo)
-    except ValueError:
-        return None
-    bounds = slot_bounds(day, str(reservation.get("time_slot") or ""))
-    if not bounds:
-        return None
-    return bounds[0] - timedelta(minutes=EARLY_ENTRY_MIN), bounds[1]
-
-
-def reservation_in_progress(now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
-    """예약한 학생의 시간인 예약이 있으면 돌려준다.
-
-    - 이미 들어와 쓰고 있는 예약(status='active')
-    - 아직 안 들어왔지만 PIN이 문을 여는 시간(시작 10분 전 ~ 종료)인 예약
-
-    전시 체험 대기열(③)이 이걸 보고 잠시 멈춘다. 예약한 학생의 시간에 관람객을
-    부르거나, 관람객의 3분이 끝났다고 학생이 쓰는 부스의 전원을 끄면 안 된다.
-    DB를 못 읽으면 None — 대기열을 멈출 근거가 없으므로 그대로 돌린다.
+def entry_window(
+    reservation: Dict[str, Any],
+    tzinfo=None,
+) -> Optional[tuple]:
     """
-    now = now or now_local()
+    기존 코드와의 호환을 위해 유지하는 함수.
+
+    현재 PIN 인증에서는 예약 시간 제한을 적용하지 않는다.
+    """
+
+    day_text = str(
+        reservation.get("reservation_date") or ""
+    )[:10]
+
     try:
-        todays = db.get_reservations_on(now.strftime("%Y-%m-%d"))
-    except Exception:
+        day = datetime.strptime(
+            day_text,
+            "%Y-%m-%d",
+        ).replace(
+            tzinfo=tzinfo or now_local().tzinfo
+        )
+
+    except (TypeError, ValueError):
         return None
-    for r in todays:
-        status = str(r.get("status") or "")
-        if status == "active":
-            return r
-        if status != "reserved":
-            continue
-        window = entry_window(r, now.tzinfo)
-        if window and window[0] <= now < window[1]:
-            return r
+
+    return slot_bounds(
+        day,
+        str(
+            reservation.get("time_slot") or ""
+        ),
+    )
+
+
+# ── 예약 이용 상태 ────────────────────────────────────────────────────────
+
+def reservation_in_progress(
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    현재 실제로 이용 중인 예약을 반환한다.
+
+    예약 예정 시간과 관계없이 실제 입장한 예약만 확인한다.
+    """
+
+    current_time = now or now_local()
+
+    try:
+        reservations = _get_active_reservations()
+
+        for reservation in reservations:
+            end = _reservation_end(reservation)
+
+            if end and end > current_time:
+                return reservation
+
+    except Exception as exc:
+        logger.warning(
+            "이용 중인 예약 조회 실패: %s",
+            exc,
+        )
+
     return None
 
 
 def finish_active_reservations() -> int:
-    """관리자가 [이용 종료]로 끝낸 예약을 완료 처리한다.
-
-    그대로 두면 예약은 '이용 중'으로 남아서, 엔진이 그 예약의 종료 10분 전과
-    종료 시각에 빈 부스에 알림·퇴실곡을 한 번 더 내고, 그동안 체험 대기열도 멈춰 있다.
     """
-    today = now_local().strftime("%Y-%m-%d")
+    관리자 수동 이용 종료 후 활성 예약을 완료 처리한다.
+
+    실제 장치 종료 동작은 호출한 관리자 API에서 처리한다.
+
+    기존 API와의 호환성을 위해 완료 처리된 예약 개수를 반환한다.
+    """
+
     finished = 0
+
     try:
-        for r in db.get_reservations_on(today):
-            if str(r.get("status") or "") != "active":
+        reservations = _get_active_reservations()
+
+        for reservation in reservations:
+            rid = reservation.get("id")
+
+            if rid is None:
+                logger.warning(
+                    "예약 ID가 없어 완료 처리할 수 없습니다: %s",
+                    reservation,
+                )
                 continue
-            db.update_reservation_status(r.get("id"), "completed")
-            _state["warned_ids"].discard(r.get("id"))
-            _remember("session_end", r, "관리자가 이용을 종료해 예약을 완료 처리했습니다.")
-            finished += 1
+
+            try:
+                updated = db.update_reservation_status(
+                    rid,
+                    "completed",
+                )
+
+                if not updated:
+                    logger.warning(
+                        "예약 %s의 완료 상태 변경에 실패했습니다.",
+                        rid,
+                    )
+                    continue
+
+                _state["warned_ids"].discard(rid)
+                _state["ending_ids"].discard(rid)
+
+                _remember(
+                    "session_end",
+                    reservation,
+                    "관리자가 이용을 종료해 예약을 완료 처리했습니다.",
+                )
+
+                finished += 1
+
+            except Exception as exc:
+                logger.error(
+                    "예약 %s 완료 처리 실패: %s",
+                    rid,
+                    exc,
+                )
+
     except Exception as exc:
-        logger.warning(f"이용 중인 예약을 완료 처리하지 못했습니다: {exc}")
+        logger.warning(
+            "이용 중인 예약 조회 실패: %s",
+            exc,
+        )
+
     return finished
 
 
-def current_session(now: Optional[datetime] = None) -> Dict[str, Any]:
-    """지금 부스를 쓰는 사람과 끝나는 시각 — 부스 화면(/booth) 표시용.
+# ── 현재 이용 세션 ────────────────────────────────────────────────────────
 
-    부스 대형 화면에 그대로 뜨므로 비밀번호 같은 것은 싣지 않는다. 이름은 인증
-    성공 방송에도 이미 나가는 정보다. 남은 시간은 서버 시계로 계산해 보낸다 —
-    부스 PC의 시계가 틀려도 화면의 남은 시간은 맞게 나온다.
-
-    예약도 체험도 아닌데 전원이 켜져 있으면(관리자가 직접 켠 경우) kind 가 None 이다.
+def current_session(
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
     """
-    now = now or now_local()
-    today = now.strftime("%Y-%m-%d")
+    현재 부스를 이용 중인 사람과 종료 시각을 반환한다.
 
-    def _session(kind: str, user_name: str, nickname: str, ends: datetime) -> Dict[str, Any]:
-        return {
-            "kind": kind,
-            "user_name": user_name,
-            "nickname": nickname,
-            "ends_at": ends.isoformat(timespec="minutes"),
-            "remaining_sec": max(0, int((ends - now).total_seconds())),
-        }
+    PIN이나 민감한 인증 정보는 화면에 전달하지 않는다.
+    """
+
+    current_time = now or now_local()
 
     try:
-        for r in db.get_reservations_on(today):
-            if str(r.get("status") or "") != "active":
+        reservations = _get_active_reservations()
+
+        for reservation in reservations:
+            end = _reservation_end(reservation)
+
+            if not end or end <= current_time:
                 continue
-            bounds = slot_bounds(now, str(r.get("time_slot") or ""))
-            if bounds:
-                name = str(r.get("student_name") or "학생")
-                return _session("reservation", name, name, bounds[1])
+
+            name = str(
+                reservation.get("student_name") or "학생"
+            )
+
+            return {
+                "kind": "reservation",
+                "user_name": name,
+                "nickname": name,
+                "ends_at": end.isoformat(
+                    timespec="seconds"
+                ),
+                "remaining_sec": max(
+                    0,
+                    int(
+                        (end - current_time).total_seconds()
+                    ),
+                ),
+            }
+
     except Exception as exc:
-        logger.warning(f"이용 중인 예약 조회 실패: {exc}")
+        logger.warning(
+            "현재 이용 세션 조회 실패: %s",
+            exc,
+        )
+
+    return {
+        "kind": None,
+    }
+
+
+# ── 종료 처리 ─────────────────────────────────────────────────────────────
+
+async def _finish_reservation(
+    reservation: Dict[str, Any],
+) -> bool:
+    """
+    장치 종료와 예약 완료 처리를 수행한다.
+
+    처리 순서:
+    1. 장치 종료 명령 실행
+    2. 장치 종료 성공 여부 확인
+    3. 모든 장치 종료 성공 시 DB 예약 완료 처리
+
+    실패 시 예약 상태를 active로 유지하여 다음 주기에 재시도한다.
+    """
+
+    rid = reservation.get("id")
+
+    if rid is None:
+        logger.error(
+            "예약 ID가 없어 자동 종료할 수 없습니다: %s",
+            reservation,
+        )
+        return False
+
+    # 같은 실행 루프에서 중복 종료 명령 방지
+    if rid in _state["ending_ids"]:
+        return False
+
+    _state["ending_ids"].add(rid)
 
     try:
-        from services import experience
+        # 1. 장치 종료
+        result = await BoothService.trigger_session_end()
 
-        if experience.ENABLED:
-            for t in db.get_queue_tickets(today, ["active"]):
-                ends = experience.ticket_ends_at(t)
-                if ends:
-                    nickname = str(t.get("nickname") or "관람객")
-                    return _session("experience", f"{t.get('ticket_no')}번 {nickname}", nickname, ends)
+        # 2. 장치 종료 결과 확인
+        if not result or result.get("success") is not True:
+            failed_devices = (
+                result.get("failed_devices", [])
+                if isinstance(result, dict)
+                else []
+            )
+
+            logger.error(
+                "예약 %s 장치 종료 실패. 실패 장치: %s",
+                rid,
+                failed_devices,
+            )
+
+            _state["last_error"] = (
+                f"예약 {rid} 장치 종료 실패: {failed_devices}"
+            )
+
+            return False
+
+        # 3. 모든 장치 종료 성공 후 예약 완료 처리
+        updated = db.update_reservation_status(
+            rid,
+            "completed",
+        )
+
+        if not updated:
+            logger.error(
+                "예약 %s 장치 종료는 성공했지만 DB 완료 처리에 실패했습니다.",
+                rid,
+            )
+
+            _state["last_error"] = (
+                f"예약 {rid} DB 완료 처리 실패"
+            )
+
+            return False
+
+        _state["warned_ids"].discard(rid)
+
+        entry = _remember(
+            "session_end",
+            reservation,
+            "이용 시간이 끝나 퇴실곡을 재생하고 전원·도어락을 차단했습니다.",
+        )
+
+        try:
+            await ws_manager.broadcast({
+                "type": "scheduler_action",
+                **entry,
+            })
+
+        except Exception:
+            logger.exception(
+                "예약 %s 종료 WebSocket 알림 실패",
+                rid,
+            )
+
+        return True
+
     except Exception as exc:
-        logger.warning(f"이용 중인 체험권 조회 실패: {exc}")
+        logger.exception(
+            "자동 이용 종료 실패 (예약 %s): %s",
+            rid,
+            exc,
+        )
 
-    return {"kind": None}
+        _state["last_error"] = (
+            f"예약 {rid} 자동 종료 실패: {exc}"
+        )
 
+        return False
+
+    finally:
+        _state["ending_ids"].discard(rid)
+
+
+# ── 자동 운영 엔진 ────────────────────────────────────────────────────────
 
 async def run_once() -> Dict[str, Any]:
     """
-    한 번 훑는다. 스케줄러 루프가 부르고, 관리자가 수동으로도 부를 수 있다.
+    예약을 확인하고 종료 전 알림 및 자동 종료를 처리한다.
 
-    DB가 꺼져 있으면 아무 일도 하지 않고 조용히 넘어간다 — 엔진이 죽어서
-    백엔드 전체가 멈추면 안 된다.
+    실제 입장 시각(started_at)을 기준으로 작동한다.
     """
+
     now = now_local()
-    today = now.strftime("%Y-%m-%d")
     done: List[Dict[str, Any]] = []
 
     try:
-        # 전체 목록(최근 50건)이 아니라 오늘 예약만 묻는다. 몇 주 치 예약이 쌓이면
-        # 오늘 예약이 50건 밖으로 밀려 자동 종료·노쇼 처리가 빠질 수 있었다.
-        reservations = db.get_reservations_on(today)
+        reservations = _get_active_reservations()
+
     except Exception as exc:
-        _state["last_error"] = f"예약 목록을 읽지 못했습니다: {exc}"
-        _state["last_tick"] = now.isoformat(timespec="seconds")
-        return {"checked": 0, "actions": []}
+        _state["last_error"] = (
+            f"이용 중인 예약을 읽지 못했습니다: {exc}"
+        )
+
+        _state["last_tick"] = now.isoformat(
+            timespec="seconds"
+        )
+
+        return {
+            "checked": 0,
+            "actions": [],
+        }
 
     _state["last_error"] = None
 
-    for r in reservations:
-        if str(r.get("reservation_date") or "")[:10] != today:
-            continue
-        bounds = slot_bounds(now, str(r.get("time_slot") or ""))
-        if not bounds:
+    for reservation in reservations:
+        rid = reservation.get("id")
+
+        if str(
+            reservation.get("status") or ""
+        ) != "active":
             continue
 
-        start, end = bounds
-        status = str(r.get("status") or "")
-        rid = r.get("id")
+        end = _reservation_end(reservation)
 
-        # ── 노쇼 자동 취소 (⑨) ──────────────────────────────────────
-        # 시작하고 유예 시간이 지나도록 아무도 PIN을 누르지 않았다.
-        if status == "reserved" and now >= start + timedelta(minutes=NO_SHOW_GRACE_MIN):
-            try:
-                db.update_reservation_status(rid, "no_show")
-            except Exception as exc:
-                logger.warning(f"노쇼 처리 실패 (예약 {rid}): {exc}")
-                continue
-            entry = _remember(
-                "no_show", r,
-                f"{r.get('student_name')} 학생이 {NO_SHOW_GRACE_MIN}분 동안 입장하지 않아 "
-                f"예약을 자동 취소했습니다."
+        if not end:
+            logger.warning(
+                "예약 %s의 실제 입장 시각을 확인할 수 없습니다.",
+                rid,
             )
-            done.append(entry)
-            await ws_manager.broadcast({"type": "scheduler_action", **entry})
             continue
 
-        if status != "active":
-            continue
+        # ── 이용 종료 ──────────────────────────────────────────────
 
-        # ── 종료 10분 전 알림 ───────────────────────────────────────
-        warn_at = end - timedelta(minutes=WARN_BEFORE_MIN)
-        if warn_at <= now < warn_at + timedelta(minutes=WARN_WINDOW_MIN) \
-                and rid not in _state["warned_ids"]:
-            await BoothService.trigger_10min_warning()
-            _state["warned_ids"].add(rid)
-            entry = _remember(
-                "warn_10min", r,
-                f"이용 종료 {WARN_BEFORE_MIN}분 전 — LED 알림과 안내 음성을 내보냈습니다."
-            )
-            done.append(entry)
-            await ws_manager.broadcast({"type": "scheduler_action", **entry})
-
-        # ── 종료 처리 ───────────────────────────────────────────────
         if now >= end:
-            await BoothService.trigger_session_end()
-            try:
-                db.update_reservation_status(rid, "completed")
-            except Exception as exc:
-                logger.warning(f"종료 상태 갱신 실패 (예약 {rid}): {exc}")
-            _state["warned_ids"].discard(rid)
-            entry = _remember(
-                "session_end", r,
-                "이용 시간이 끝나 퇴실곡을 재생하고 전원·도어락을 차단했습니다."
+            finished = await _finish_reservation(
+                reservation
             )
-            done.append(entry)
-            await ws_manager.broadcast({"type": "scheduler_action", **entry})
 
-    # 전시 체험 대기열도 같은 주기로 굴린다 (부록G §2-③).
-    # 호출 만료 · 체험 종료 · 다음 사람 호출이 여기서 일어난다.
-    try:
-        from services import experience
+            if finished:
+                done.append({
+                    "action": "session_end",
+                    "reservation_id": rid,
+                    "student_name": reservation.get("student_name"),
+                    "time_slot": reservation.get("time_slot"),
+                    "message": "이용 시간이 끝나 퇴실곡을 재생하고 전원·도어락을 차단했습니다.",
+                    "at": now_local().isoformat(timespec="seconds"),
+                })
 
-        queue_actions = await experience.advance()
-        for qa in queue_actions:
-            _state["actions"] = ([{
-                "action": f"queue_{qa['event']}",
-                "message": f"체험권 {qa.get('ticket_no')}번 — {qa['event']}",
-                "at": now.isoformat(timespec="seconds"),
-            }] + _state["actions"])[:20]
-    except Exception as exc:
-        logger.warning(f"대기열 진행 중 오류: {exc}")
+            # 종료 대상이면 경고는 더 이상 실행하지 않는다.
+            continue
 
-    _state["last_tick"] = now.isoformat(timespec="seconds")
-    return {"checked": len(reservations), "actions": done}
+        # ── 종료 전 알림 ───────────────────────────────────────────
 
+        warn_at = end - timedelta(
+            seconds=WARN_BEFORE_SEC
+        )
+
+        if (
+            warn_at <= now
+            < warn_at + timedelta(seconds=WARN_WINDOW_SEC)
+            and rid not in _state["warned_ids"]
+        ):
+            try:
+                await BoothService.trigger_10min_warning()
+
+                _state["warned_ids"].add(rid)
+
+                if MODE == "demo":
+                    warn_text = (
+                        f"이용 종료 {WARN_BEFORE_SEC}초 전"
+                    )
+                else:
+                    warn_text = (
+                        f"이용 종료 {WARN_BEFORE_SEC // 60}분 전"
+                    )
+
+                entry = _remember(
+                    "session_warning",
+                    reservation,
+                    f"{warn_text} — LED 알림과 안내 음성을 내보냈습니다.",
+                )
+
+                done.append(entry)
+
+                try:
+                    await ws_manager.broadcast({
+                        "type": "scheduler_action",
+                        **entry,
+                    })
+
+                except Exception:
+                    logger.exception(
+                        "예약 %s 종료 전 알림 WebSocket 전송 실패",
+                        rid,
+                    )
+
+            except Exception as exc:
+                logger.error(
+                    "종료 전 알림 실패 (예약 %s): %s",
+                    rid,
+                    exc,
+                )
+
+    _state["last_tick"] = now.isoformat(
+        timespec="seconds"
+    )
+
+    return {
+        "checked": len(reservations),
+        "actions": done,
+    }
+
+
+# ── 관리자 상태 조회 ─────────────────────────────────────────────────────
 
 def get_status() -> Dict[str, Any]:
-    """관리자 화면이 '엔진이 살아 있나'를 확인할 때 쓴다."""
-    now = now_local()
-    today = now.strftime("%Y-%m-%d")
+    """관리자 화면에서 자동 운영 엔진 상태를 확인한다."""
 
+    now = now_local()
     upcoming: List[Dict[str, Any]] = []
+
     try:
-        for r in db.get_reservations_on(today):
-            if str(r.get("reservation_date") or "")[:10] != today:
+        reservations = db.get_reservations_on(
+            now.strftime("%Y-%m-%d")
+        )
+
+        for reservation in reservations:
+            reservation_status = str(
+                reservation.get("status") or ""
+            )
+
+            if reservation_status not in (
+                "reserved",
+                "active",
+            ):
                 continue
-            if str(r.get("status") or "") not in ("reserved", "active"):
-                continue
-            bounds = slot_bounds(now, str(r.get("time_slot") or ""))
+
+            time_slot = str(
+                reservation.get("time_slot") or ""
+            )
+
+            bounds = slot_bounds(
+                now,
+                time_slot,
+            )
+
             if not bounds:
                 continue
-            start, end = bounds
+
+            start, scheduled_end = bounds
+
+            actual_end = (
+                _reservation_end(reservation)
+                if reservation_status == "active"
+                else None
+            )
+
+            end = actual_end or scheduled_end
+
             upcoming.append({
-                "reservation_id": r.get("id"),
-                "student_name": r.get("student_name"),
-                "time_slot": r.get("time_slot"),
-                "status": r.get("status"),
-                "starts_at": start.isoformat(timespec="minutes"),
-                "warns_at": (end - timedelta(minutes=WARN_BEFORE_MIN)).isoformat(timespec="minutes"),
-                "ends_at": end.isoformat(timespec="minutes"),
+                "reservation_id": reservation.get("id"),
+                "student_name": reservation.get("student_name"),
+                "time_slot": time_slot,
+                "status": reservation_status,
+                "starts_at": start.isoformat(
+                    timespec="minutes"
+                ),
+                "warns_at": (
+                    end - timedelta(seconds=WARN_BEFORE_SEC)
+                ).isoformat(
+                    timespec="seconds"
+                ),
+                "ends_at": end.isoformat(
+                    timespec="seconds"
+                ),
             })
+
     except Exception as exc:
-        logger.warning(f"스케줄러 상태 조회 중 DB 오류: {exc}")
+        logger.warning(
+            "스케줄러 상태 조회 중 오류: %s",
+            exc,
+        )
 
     return {
         "enabled": ENABLED,
+        "mode": MODE,
         "interval_sec": INTERVAL_SEC,
-        "warn_before_min": WARN_BEFORE_MIN,
-        "no_show_grace_min": NO_SHOW_GRACE_MIN,
+        "warn_before_sec": WARN_BEFORE_SEC,
+        "durations_sec": DURATIONS,
         "timezone": tz_name(),
-        "now": now.isoformat(timespec="seconds"),
+        "now": now.isoformat(
+            timespec="seconds"
+        ),
         "last_tick": _state["last_tick"],
         "last_error": _state["last_error"],
         "actions": _state["actions"],
-        "upcoming": sorted(upcoming, key=lambda u: u["starts_at"]),
+        "upcoming": sorted(
+            upcoming,
+            key=lambda item: item["starts_at"],
+        ),
     }
 
 
@@ -358,39 +801,65 @@ _task: Optional[asyncio.Task] = None
 
 async def _loop() -> None:
     logger.info(
-        f"예약 자동 운영 엔진 시작 — {INTERVAL_SEC}초 주기, "
-        f"종료 {WARN_BEFORE_MIN}분 전 알림, 노쇼 유예 {NO_SHOW_GRACE_MIN}분"
+        "예약 자동 운영 엔진 시작 — "
+        "모드: %s, 주기: %s초, 종료 전 알림: %s초",
+        MODE,
+        INTERVAL_SEC,
+        WARN_BEFORE_SEC,
     )
+
     while True:
         try:
             await run_once()
+
         except asyncio.CancelledError:
             raise
+
         except Exception as exc:
-            # 한 번 실패했다고 엔진이 멈추면 안 된다
             _state["last_error"] = str(exc)
-            logger.error(f"스케줄러 tick 실패: {exc}")
-        await asyncio.sleep(INTERVAL_SEC)
+
+            logger.error(
+                "스케줄러 실행 오류: %s",
+                exc,
+            )
+
+        await asyncio.sleep(
+            INTERVAL_SEC
+        )
 
 
 def start() -> None:
     """FastAPI 시작 시 호출한다."""
+
     global _task
+
     if not ENABLED:
-        logger.info("SCHEDULER_ENABLED=false — 예약 자동 운영 엔진을 켜지 않습니다.")
+        logger.info(
+            "SCHEDULER_ENABLED=false — "
+            "자동 운영 엔진을 실행하지 않습니다."
+        )
         return
+
     if _task and not _task.done():
         return
-    _task = asyncio.create_task(_loop())
+
+    _task = asyncio.create_task(
+        _loop()
+    )
 
 
 async def stop() -> None:
     """FastAPI 종료 시 호출한다."""
+
     global _task
+
     if _task and not _task.done():
         _task.cancel()
+
         try:
             await _task
+
         except asyncio.CancelledError:
             pass
+
     _task = None

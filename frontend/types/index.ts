@@ -1,3 +1,4 @@
+
 export interface Device {
   id: string;
   name: string;
@@ -51,8 +52,6 @@ export interface WebSocketMessage {
   nickname?: string;
   title?: string;
   score?: number;
-  // queue_called / queue_updated (부록G §2-③)
-  ticket_no?: number;
   success?: boolean;
   /** 부스 화면이 소리 내어 읽을 안내 문장 (파이 스피커와 같은 문장) */
   speech?: string;
@@ -64,8 +63,8 @@ export interface WebSocketMessage {
 
 /** 지금 부스를 쓰는 사람 — GET /api/booth/session (부스 화면 표시용) */
 export interface BoothSession {
-  /** reservation(예약) · experience(전시 체험) · null(관리자가 직접 켰거나 비어 있음) */
-  kind: "reservation" | "experience" | null;
+  /** reservation(예약) · null(관리자가 직접 켰거나 비어 있음) */
+  kind: "reservation" | null;
   user_name?: string;
   /** 순위에 올릴 이름의 기본값 */
   nickname?: string;
@@ -88,36 +87,4 @@ export interface ScoreRecord {
   volume?: number | null;
   expression?: number | null;
   created_at?: string | null;
-}
-
-/** 전시 체험권 한 장 (부록G §2-③) */
-export interface QueueTicket {
-  id: number;
-  ticket_no: number;
-  issued_on?: string;
-  nickname: string;
-  /** 발급 직후, 또는 자기 비밀번호를 같이 보낸 조회에서만 내려온다 */
-  pin_code?: string;
-  status: "waiting" | "called" | "active" | "done" | "expired" | string;
-  issued_at?: string | null;
-  called_at?: string | null;
-  started_at?: string | null;
-  ended_at?: string | null;
-  /** 앞에 남은 사람 수 (0이면 내 차례) */
-  position?: number;
-  estimated_wait_min?: number;
-}
-
-/** 대기열 현황 — 부스 화면·관람객 폰·관리자 화면이 같은 것을 본다 */
-export interface QueueSnapshot {
-  enabled: boolean;
-  /** 예약한 학생의 이용 시간이라 잠시 부르지 않을 때 그 이유 */
-  paused_reason?: string | null;
-  experience_minutes: number;
-  call_grace_minutes: number;
-  now?: string;
-  now_serving: { id: number; ticket_no: number; nickname: string; status: string } | null;
-  waiting_count: number;
-  waiting: { id: number; ticket_no: number; nickname: string }[];
-  estimated_wait_min: number;
 }

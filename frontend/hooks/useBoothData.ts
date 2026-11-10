@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
@@ -12,7 +13,6 @@ import { useKaraokeSocket } from "@/hooks/useKaraokeSocket";
 import { SCHOOL_ANTHEM_TITLE } from "@/data/karaokeSongs";
 import {
   Device,
-  QueueSnapshot,
   Reservation,
   ScoreRecord,
   Song,
@@ -22,7 +22,7 @@ import {
 /** 부스 화면이 소리 내어 읽을 안내 한 건. seq 가 바뀔 때마다 새 안내다. */
 export interface BoothAnnouncement {
   seq: number;
-  /** auth · entry_detected · 10min_warning · session_ended · queue_called */
+  /** auth · entry_detected · 10min_warning · session_ended */
   event: string;
   text: string;
 }
@@ -61,13 +61,14 @@ export function useBoothData() {
   const [allSongs, setAllSongs] = useState<Song[]>([]);
   const [favoriteSongs, setFavoriteSongs] = useState<Song[]>([]);
   const [lastEventMsg, setLastEventMsg] = useState<string>("부스 시스템이 정상 대기 중입니다.");
+
   // 순위 (부록G §2-④) — 오늘 기록과 명예의 전당을 따로 본다
   const [topToday, setTopToday] = useState<ScoreRecord[]>([]);
   const [topAll, setTopAll] = useState<ScoreRecord[]>([]);
+
   // 축제 교가 부르기 대회 — 오늘 교가 점수, 이름당 최고 기록 하나 (상품 배부 기준)
   const [anthemTop, setAnthemTop] = useState<ScoreRecord[]>([]);
-  // 전시 체험 대기열 (부록G §2-③)
-  const [queue, setQueue] = useState<QueueSnapshot | null>(null);
+
   // 부스 화면(/booth)이 읽어 줄 안내와 키패드 인증 결과.
   // 소리는 부스에서 나야 한다 — 예전에는 선생님 노트북(/admin)에서 났다.
   const [announcement, setAnnouncement] = useState<BoothAnnouncement | null>(null);
@@ -134,15 +135,6 @@ export function useBoothData() {
     }
   }, []);
 
-  const fetchQueue = useCallback(async () => {
-    try {
-      const res = await fetch(apiUrl("/api/experience/queue"));
-      if (res.ok) setQueue((await res.json()).data ?? null);
-    } catch {
-      // 대기열을 못 받아도 노래방은 돌아가야 한다
-    }
-  }, []);
-
   // 관리자로 로그인·로그아웃하면 예약 목록을 다시 받는다 (PIN이 보였다 사라졌다 한다)
   const adminAuthed = useSyncExternalStore(
     subscribeAdminSession,
@@ -157,10 +149,9 @@ export function useBoothData() {
       fetchDevices();
       fetchSongs();
       fetchScores();
-      fetchQueue();
     }, 0);
     return () => clearTimeout(id);
-  }, [fetchDevices, fetchSongs, fetchScores, fetchQueue]);
+  }, [fetchDevices, fetchSongs, fetchScores]);
 
   useEffect(() => {
     const id = setTimeout(fetchReservations, 0);
@@ -218,16 +209,9 @@ export function useBoothData() {
           `${msg.nickname ?? "익명"}님이 ${msg.title ?? "노래"}로 ${msg.score ?? 0}점을 받았습니다!`
         );
         fetchScores();
-      } else if (msg.type === "queue_called") {
-        const text = msg.message || `${msg.ticket_no ?? ""}번 입장해 주세요!`;
-        setLastEventMsg(text);
-        announce("queue_called", msg.speech ?? text);
-        fetchQueue();
-      } else if (msg.type === "queue_updated") {
-        fetchQueue();
       }
     },
-    [fetchDevices, fetchReservations, fetchSongs, fetchScores, fetchQueue, announce]
+    [fetchDevices, fetchReservations, fetchSongs, fetchScores, announce]
   );
 
   const { isConnected } = useKaraokeSocket(handleWsMessage);
@@ -241,7 +225,6 @@ export function useBoothData() {
     topToday,
     topAll,
     anthemTop,
-    queue,
     announcement,
     authNotice,
     isConnected,
@@ -249,7 +232,6 @@ export function useBoothData() {
     fetchReservations,
     fetchSongs,
     fetchScores,
-    fetchQueue,
   };
 }
 

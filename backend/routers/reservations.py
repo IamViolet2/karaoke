@@ -2,58 +2,152 @@ import csv
 from datetime import datetime, timezone
 import io
 import logging
-import random
 import secrets
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 
 from auth import get_admin_pin, verify_admin_token, is_valid_admin_token
 from booth_time import now_local as booth_now, today_str as booth_today
 from db import database as db
 from iot.provider_factory import get_device_provider
-from login_guard import client_key, keypad_guard, ticket_pin_guard
+from login_guard import client_key, keypad_guard
 from schemas.reservation import (
     KeypadVerifyRequest,
     ReservationCreateRequest,
     ScoreRecordRequest,
     SongRecordRequest,
     SongVideoRequest,
-    TicketIssueRequest,
-    TicketLeaveRequest,
 )
 from services.booth_service import BoothService
-from services import scheduler, experience
+from services import scheduler
 from websocket_manager import ws_manager
+
 
 logger = logging.getLogger("backend.routers.reservations")
 
-reservations_router = APIRouter(prefix="/api/reservations", tags=["reservations"])
-booth_router = APIRouter(prefix="/api/booth", tags=["booth-automation"])
-songs_router = APIRouter(prefix="/api/songs", tags=["songs"])
-videos_router = APIRouter(prefix="/api/song-videos", tags=["song-videos"])
-scores_router = APIRouter(prefix="/api/scores", tags=["scores"])
-scheduler_router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
-experience_router = APIRouter(prefix="/api/experience", tags=["experience"])
+reservations_router = APIRouter(
+    prefix="/api/reservations",
+    tags=["reservations"],
+)
+booth_router = APIRouter(
+    prefix="/api/booth",
+    tags=["booth-automation"],
+)
+songs_router = APIRouter(
+    prefix="/api/songs",
+    tags=["songs"],
+)
+videos_router = APIRouter(
+    prefix="/api/song-videos",
+    tags=["song-videos"],
+)
+scores_router = APIRouter(
+    prefix="/api/scores",
+    tags=["scores"],
+)
+scheduler_router = APIRouter(
+    prefix="/api/scheduler",
+    tags=["scheduler"],
+)
 
+
+# ==============================================================================
+# 공통 함수
+# ==============================================================================
 
 async def _require_booth_in_use() -> None:
-    """부스 전원(relay_1)이 켜져 있을 때만 통과시킨다.
-
-    전원은 예약 PIN·호출된 체험권 PIN으로 인증했거나 관리자가 직접 켰을 때만
-    들어온다. 노래 기록과 점수는 '부스에서 실제로 부른 것'이어야 하므로 이때만
-    받는다. 예전에는 아무 폰에서나 기록을 올려 순위와 애창곡 횟수를 꾸밀 수 있었다.
     """
-    relay = await get_device_provider().get_device_status("relay_1")
+    부스 전원(relay_1)이 켜져 있을 때만 통과시킨다.
+
+    노래 기록과 점수는 부스에서 실제로 부른 것이어야 하므로
+    부스 전원이 켜져 있는 경우에만 기록을 허용한다.
+    """
+
+    relay = await get_device_provider().get_device_status(
+        "relay_1"
+    )
+
     if not relay or relay.get("current_state") != "on":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "BOOTH_NOT_IN_USE",
-                "message": "부스를 이용하는 중(전원이 켜져 있을 때)에만 기록할 수 있습니다.",
+                "message": (
+                    "부스를 이용하는 중(전원이 켜져 있을 때)에만 "
+                    "기록할 수 있습니다."
+                ),
             },
         )
+
+
+def _generate_reservation_pin() -> str:
+    """
+    중복되지 않는 4자리 예약 PIN을 생성한다.
+
+    관리자 PIN, 개발용 PIN, 기존 예약 PIN과 겹치지 않게 한다.
+    사용 중인 PIN 조회에 실패하면 안전을 위해 발급을 중단한다.
+    """
+
+    try:
+        taken = {
+            str(pin)
+            for pin in db.pins_in_use(booth_today())
+            if pin is not None
+        }
+
+    except Exception as exc:
+        logger.error(
+            "사용 중인 PIN 조회 실패: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "PIN_CHECK_FAILED",
+                "message": (
+                    "예약 비밀번호 중복 확인에 실패했습니다. "
+                    "잠시 뒤 다시 시도해 주세요."
+                ),
+            },
+        )
+
+    admin_pin = get_admin_pin()
+
+    taken.add("1234")
+
+    if admin_pin is not None:
+        taken.add(str(admin_pin))
+
+    available = [
+        f"{number:04d}"
+        for number in range(1000, 10000)
+        if f"{number:04d}" not in taken
+    ]
+
+    if not available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NO_AVAILABLE_PIN",
+                "message": (
+                    "발급 가능한 예약 비밀번호가 없습니다. "
+                    "관리자에게 문의해 주세요."
+                ),
+            },
+        )
+
+    return secrets.choice(available)
 
 
 # ==============================================================================
@@ -62,87 +156,113 @@ async def _require_booth_in_use() -> None:
 
 @reservations_router.get("")
 async def list_reservations(
-    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+    x_admin_token: Optional[str] = Header(
+        None,
+        alias="X-Admin-Token",
+    ),
 ) -> Dict[str, Any]:
-    """예약 목록 조회
-
-    ⚠️ PIN은 관리자에게만 보여 준다. 이 목록은 부스 화면·학생 폰도 가져가는데,
-    예전에는 모든 예약의 PIN이 그대로 실려 있어서 주소창에 이 API를 치기만 하면
-    남의 예약 시간에 들어갈 수 있었다. 학생 본인은 신청할 때 받은 응답으로 PIN을 안다.
     """
+    예약 목록 조회.
+
+    PIN은 관리자에게만 보여 준다.
+    일반 사용자는 예약 목록에서 다른 사람의 PIN을 확인할 수 없다.
+    """
+
     try:
         items = db.get_reservations()
+
     except Exception as exc:
-        logger.error(f"Failed to fetch reservations: {exc}")
+        logger.error(
+            "Failed to fetch reservations: %s",
+            exc,
+        )
         return {"data": []}
 
     if not is_valid_admin_token(x_admin_token):
-        items = [{k: v for k, v in r.items() if k != "pin_code"} for r in items]
+        items = [
+            {
+                key: value
+                for key, value in reservation.items()
+                if key != "pin_code"
+            }
+            for reservation in items
+        ]
+
     return {"data": items}
 
 
 @reservations_router.post("")
-async def create_new_reservation(req: ReservationCreateRequest) -> Dict[str, Any]:
+async def create_new_reservation(
+    req: ReservationCreateRequest,
+) -> Dict[str, Any]:
     """
-    새 노래방 부스 예약 신청
-    - 당일 예약 차단: 오늘 날짜 이하로 예약 신청 시 차단 ("당일 예약은 불가능합니다")
-    - 중복 예약 차단: 동일 날짜/타임슬롯 중복 신청 차단
-    - 4자리 일회성 비밀번호(OTP) 자동 생성
+    새 노래방 부스 예약 신청.
+
+    - 과거 날짜 예약 차단
+    - 당일 예약 허용
+    - 미래 날짜 예약 허용
+    - 동일 날짜/시간대 중복 예약 차단
+    - 4자리 일회성 비밀번호 자동 생성
     """
-    # 1. 날짜 유효성 검사 (당일 예약 불가)
-    #    서버 시계가 아니라 부스 시간으로 판단한다. Render(UTC)에서 datetime.now()를
-    #    쓰면 한국 시간 0시~9시 사이에는 "어제"로 계산되어 당일 예약이 통과했다.
+
     today_str = booth_today()
-    if req.reservation_date <= today_str:
+
+    if req.reservation_date < today_str:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "code": "SAME_DAY_NOT_ALLOWED",
-                "message": "당일 예약은 불가능합니다. 최소 익일 이후 날짜를 선택해 주세요."
-            }
+                "code": "PAST_DATE_NOT_ALLOWED",
+                "message": "과거 날짜는 예약할 수 없습니다.",
+            },
         )
 
-    # 2. 타임슬롯 유효성 검사
     if req.time_slot not in ("lunch", "dinner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "INVALID_TIME_SLOT",
-                "message": "타임슬롯은 'lunch'(점심) 또는 'dinner'(저녁)여야 합니다."
-            }
+                "message": (
+                    "타임슬롯은 'lunch'(점심) 또는 "
+                    "'dinner'(저녁)여야 합니다."
+                ),
+            },
         )
 
-    # 3. 중복 예약 여부 확인
-    #    전체 목록(최근 50건)을 훑으면 예약이 많이 쌓였을 때 같은 날짜가 목록에서
-    #    잘려 중복이 통과할 수 있다. 그 날짜·시간대만 콕 집어서 묻는다.
     try:
-        existing = db.find_live_reservation(req.reservation_date, req.time_slot)
+        existing = db.find_live_reservation(
+            req.reservation_date,
+            req.time_slot,
+        )
+
     except Exception as exc:
-        logger.warning(f"Error checking duplicate reservation: {exc}")
-        existing = None
+        logger.error(
+            "Error checking duplicate reservation: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "RESERVATION_CHECK_FAILED",
+                "message": (
+                    "예약 가능 여부를 확인하지 못했습니다. "
+                    "잠시 뒤 다시 시도해 주세요."
+                ),
+            },
+        )
+
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "SLOT_ALREADY_RESERVED",
-                "message": f"선택하신 날짜({req.reservation_date})의 해당 시간대는 이미 예약이 완료되었습니다."
-            }
+                "message": (
+                    f"선택하신 날짜({req.reservation_date})의 "
+                    "해당 시간대는 이미 예약이 완료되었습니다."
+                ),
+            },
         )
 
-    # 4. 무작위 4자리 OTP PIN 생성
-    #    관리자 PIN(.env 값 — 9179로 고정된 게 아니다)과 개발용 PIN, 그리고 지금
-    #    살아 있는 다른 예약·체험권의 PIN과 겹치지 않게 고른다. 겹치면 키패드가
-    #    엉뚱한 사람의 예약을 열거나, 학생이 관리자 모드로 들어가 버린다.
-    try:
-        taken = set(db.pins_in_use(today_str))
-    except Exception as exc:
-        logger.warning(f"Could not read PINs in use: {exc}")
-        taken = set()
-    taken |= {get_admin_pin(), "1234"}
-    for _ in range(500):
-        pin = f"{random.randint(1000, 9999)}"
-        if pin not in taken:
-            break
+    pin = _generate_reservation_pin()
 
     try:
         reservation = db.create_reservation(
@@ -152,30 +272,59 @@ async def create_new_reservation(req: ReservationCreateRequest) -> Dict[str, Any
             user_count=req.user_count,
             reservation_date=req.reservation_date,
             time_slot=req.time_slot,
-            pin_code=pin
+            pin_code=pin,
         )
+
+    except ValueError as exc:
+        # 사전 중복 검사 이후 다른 요청이 먼저 예약했을 수 있다.
+        # 저장소에서 발생한 중복 예약 오류를 HTTP 409로 변환한다.
+        logger.info(
+            "Reservation slot conflict: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SLOT_ALREADY_RESERVED",
+                "message": (
+                    f"선택하신 날짜({req.reservation_date})의 "
+                    "해당 시간대는 이미 예약이 완료되었습니다."
+                ),
+            },
+        )
+
     except Exception as exc:
-        # 다른 저장 API(점수·노래·체험권)와 같이 503 — "잠시 뒤 다시"가 맞는 상황이다
-        logger.error(f"Failed to create reservation in DB: {exc}")
+        logger.error(
+            "Failed to create reservation: %s",
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "RESERVATION_CREATION_FAILED",
-                "message": "예약을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요."
-            }
+                "message": (
+                    "예약을 저장하지 못했습니다. "
+                    "잠시 뒤 다시 시도해 주세요."
+                ),
+            },
         )
 
-    # WebSocket 브로드캐스트
     await ws_manager.broadcast({
         "type": "reservation_created",
         "reservation_id": reservation.get("id"),
         "student_name": req.student_name,
         "reservation_date": req.reservation_date,
         "time_slot": req.time_slot,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        "timestamp": (
+            datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
     })
 
-    return {"data": reservation}
+    return {
+        "data": reservation,
+    }
 
 
 # ==============================================================================
@@ -184,62 +333,203 @@ async def create_new_reservation(req: ReservationCreateRequest) -> Dict[str, Any
 
 @booth_router.get("/session")
 async def booth_session() -> Dict[str, Any]:
-    """지금 부스를 쓰는 사람과 남은 시간 — 부스 화면(/booth)이 띄운다."""
-    return {"data": scheduler.current_session()}
+    """현재 부스 이용자와 남은 시간을 반환한다."""
+
+    return {
+        "data": scheduler.current_session(),
+    }
 
 
 @booth_router.post("/verify-keypad")
-async def verify_keypad(req: KeypadVerifyRequest, request: Request) -> Dict[str, Any]:
+async def verify_keypad(
+    req: KeypadVerifyRequest,
+    request: Request,
+) -> Dict[str, Any]:
     """
-    4x4 키패드 입력 비밀번호 검증 (사용자 OTP 또는 .env의 관리자 PIN)
+    키패드 입력 비밀번호 검증.
 
-    연속으로 틀리면 잠시 막는다 (login_guard.py) — 시판 도어락과 같은 동작이다.
-    "PIN은 맞는데 예약 시간이 아님"은 틀린 것으로 세지 않는다.
+    - 예약 PIN
+    - 관리자 PIN
+
+    연속으로 틀리면 login_guard.py에서 일정 시간 차단한다.
+    예약 날짜나 시간대에 따른 PIN 인증 제한은 적용하지 않는다.
     """
+
     key = client_key(request)
+
     keypad_guard.check(key)
 
-    result = await BoothService.verify_and_trigger(req.pin)
+    result = await BoothService.verify_and_trigger(
+        req.pin
+    )
+
     if not result.get("success"):
-        if result.get("reason") == "not_now":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "NOT_RESERVATION_TIME", "message": result.get("message")}
-            )
         keypad_guard.fail(key)
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_PIN", "message": result.get("message")}
+            detail={
+                "code": "INVALID_PIN",
+                "message": result.get("message"),
+            },
         )
+
     keypad_guard.succeed(key)
-    return {"data": result}
+
+    return {
+        "data": result,
+    }
 
 
 @booth_router.post("/simulate-entry")
-async def simulate_entry(_admin: str = Depends(verify_admin_token)) -> Dict[str, Any]:
-    """입장 감지 센서(PIR) 또는 비전 사람 감지 트리거 시뮬레이션"""
+async def simulate_entry(
+    _admin: str = Depends(verify_admin_token),
+) -> Dict[str, Any]:
+    """입장 감지 센서(PIR) 또는 비전 사람 감지 트리거 시뮬레이션."""
+
     result = await BoothService.trigger_entry()
-    return {"data": result}
+
+    return {
+        "data": result,
+    }
 
 
 @booth_router.post("/simulate-10min-warning")
-async def simulate_10min_warning(_admin: str = Depends(verify_admin_token)) -> Dict[str, Any]:
-    """종료 10분 전 LED 깜빡임 및 사전 알림 트리거 시뮬레이션"""
+async def simulate_10min_warning(
+    _admin: str = Depends(verify_admin_token),
+) -> Dict[str, Any]:
+    """
+    이용 종료 전 LED 깜빡임 및 사전 알림 트리거 시뮬레이션.
+
+    기존 프론트엔드 API 경로와의 호환성을 위해
+    엔드포인트 이름은 유지한다.
+    """
+
     result = await BoothService.trigger_10min_warning()
-    return {"data": result}
+
+    return {
+        "data": result,
+    }
 
 
 @booth_router.post("/simulate-end")
-async def simulate_end(_admin: str = Depends(verify_admin_token)) -> Dict[str, Any]:
-    """이용 종료 및 퇴실곡 재생 + 전원/도어락 차단 (관리자 [이용 종료])
-
-    전원만 끄지 않고 지금 쓰던 예약·체험권도 끝낸다. 그래야 다음 체험 관람객을
-    곧바로 부르고, 원래 끝날 시각에 빈 부스에서 알림·퇴실곡이 또 나오지 않는다.
+async def simulate_end(
+    _admin: str = Depends(verify_admin_token),
+) -> Dict[str, Any]:
     """
-    result = await BoothService.trigger_session_end()
-    scheduler.finish_active_reservations()
-    await experience.finish_active()
-    return {"data": result}
+    이용 종료 및 퇴실곡 재생 + 전원/도어락 차단.
+
+    처리 순서:
+    1. 장치 종료 명령 실행
+    2. 장치 종료 성공 여부 확인
+    3. 활성 예약 완료 처리
+    4. DB를 다시 조회하여 활성 예약이 남았는지 확인
+
+    장치 종료에 실패하면 예약을 완료 처리하지 않는다.
+    """
+
+    # 1. 장치 종료 실행
+    try:
+        result = await BoothService.trigger_session_end()
+
+    except Exception as exc:
+        logger.exception(
+            "Manual session end failed: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DEVICE_SHUTDOWN_FAILED",
+                "message": (
+                    "부스 장치 종료 과정에서 오류가 발생했습니다. "
+                    "예약은 완료 처리하지 않았습니다."
+                ),
+            },
+        )
+
+    # 2. 장치 종료 결과 확인
+    if not isinstance(result, dict) or result.get("success") is not True:
+        logger.error(
+            "Manual session end partially failed: %s",
+            result,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DEVICE_SHUTDOWN_FAILED",
+                "message": (
+                    "일부 장치의 종료에 실패했습니다. "
+                    "예약은 완료 처리하지 않았습니다."
+                ),
+                "device_result": result,
+            },
+        )
+
+    # 3. 활성 예약 완료 처리
+    try:
+        finished_count = scheduler.finish_active_reservations()
+
+        # 4. 실제 저장소 상태 재확인
+        remaining = db.get_active_reservations()
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to complete active reservations after shutdown: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "RESERVATION_COMPLETION_FAILED",
+                "message": (
+                    "장치는 종료했지만 예약 완료 상태를 "
+                    "확인하지 못했습니다."
+                ),
+                "device_result": result,
+            },
+        )
+
+    # 활성 예약이 남아 있으면 완료 처리 실패로 판단한다.
+    if remaining:
+        remaining_ids = [
+            reservation.get("id")
+            for reservation in remaining
+        ]
+
+        logger.error(
+            "Active reservations remain after manual shutdown: %s",
+            remaining_ids,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "RESERVATION_COMPLETION_INCOMPLETE",
+                "message": (
+                    "장치는 종료했지만 일부 예약이 "
+                    "완료 처리되지 않았습니다."
+                ),
+                "finished_count": finished_count,
+                "remaining_reservation_ids": remaining_ids,
+            },
+        )
+
+    logger.info(
+        "Manual session end completed. Reservations finished: %s",
+        finished_count,
+    )
+
+    return {
+        "data": {
+            **result,
+            "reservations_finished": finished_count,
+            "reservations_remaining": 0,
+        },
+    }
 
 
 # ==============================================================================
@@ -247,69 +537,107 @@ async def simulate_end(_admin: str = Depends(verify_admin_token)) -> Dict[str, A
 # ==============================================================================
 
 @songs_router.get("")
-async def list_songs(min_count: int = Query(3, ge=1)) -> Dict[str, Any]:
+async def list_songs(
+    min_count: int = Query(3, ge=1),
+) -> Dict[str, Any]:
     """
-    노래 목록 조회 (전체 및 나의 18번 애창곡 리스트)
+    노래 목록 조회.
 
-    DB가 아직 안 떠 있어도 노래방 화면 자체는 동작해야 하므로,
-    다른 조회 엔드포인트와 같이 빈 목록으로 degrade한다.
+    DB가 연결되지 않아도 노래방 화면 자체는 동작하도록
+    조회 실패 시 빈 목록을 반환한다.
     """
+
     try:
         all_songs = db.get_all_songs()
-        favorites = db.get_favorite_songs(min_count=min_count)
+        favorites = db.get_favorite_songs(
+            min_count=min_count
+        )
+
     except Exception as exc:
-        logger.error(f"Failed to fetch songs: {exc}")
+        logger.error(
+            "Failed to fetch songs: %s",
+            exc,
+        )
         all_songs, favorites = [], []
 
     return {
         "data": {
             "all": all_songs,
-            "favorites": favorites
-        }
+            "favorites": favorites,
+        },
     }
 
 
 @songs_router.post("")
-async def add_song(req: SongRecordRequest) -> Dict[str, Any]:
-    """부른 노래 기록 등록 (기존 곡이면 카운트 1 증가).
-
-    부스 화면이 채점을 마치면 올린다. 부스를 쓰는 중에만 받는다.
+async def add_song(
+    req: SongRecordRequest,
+) -> Dict[str, Any]:
     """
+    부른 노래 기록 등록.
+
+    기존 곡이면 카운트를 1 증가시킨다.
+    부스 전원이 켜져 있을 때만 기록할 수 있다.
+    """
+
     await _require_booth_in_use()
+
     try:
-        recorded = db.record_song(title=req.title, singer=req.singer)
+        recorded = db.record_song(
+            title=req.title,
+            singer=req.singer,
+        )
+
     except Exception as exc:
-        # 다른 저장 API(점수)와 같이 503으로 알려 준다 — 정체 모를 500을 내지 않는다
-        logger.error(f"Failed to record song: {exc}")
+        logger.error(
+            "Failed to record song: %s",
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "SONG_SAVE_FAILED", "message": "노래 기록을 저장하지 못했습니다."}
+            detail={
+                "code": "SONG_SAVE_FAILED",
+                "message": "노래 기록을 저장하지 못했습니다.",
+            },
         )
+
     await ws_manager.broadcast({
         "type": "song_recorded",
         "title": req.title,
         "singer": req.singer,
         "sing_count": recorded.get("sing_count"),
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        "timestamp": (
+            datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
     })
-    return {"data": recorded}
+
+    return {
+        "data": recorded,
+    }
 
 
 # ==============================================================================
 # 노래방 영상 등록 (F-06)
-#
-# 조회는 누구나 할 수 있다 — 부스 화면과 관람객 폰이 같은 영상을 봐야 하므로.
-# 등록·삭제는 관리자만 할 수 있다 — 모든 사람이 보는 화면을 바꾸는 일이므로.
 # ==============================================================================
 
 @videos_router.get("")
 async def list_song_videos() -> Dict[str, Any]:
-    """등록된 곡별 영상 ID 목록. DB가 없어도 빈 목록으로 degrade한다."""
+    """등록된 곡별 영상 ID 목록."""
+
     try:
-        return {"data": db.get_song_videos()}
+        return {
+            "data": db.get_song_videos(),
+        }
+
     except Exception as exc:
-        logger.error(f"Failed to fetch song videos: {exc}")
-        return {"data": {}}
+        logger.error(
+            "Failed to fetch song videos: %s",
+            exc,
+        )
+        return {
+            "data": {},
+        }
 
 
 @videos_router.put("/{song_id}")
@@ -318,10 +646,22 @@ async def register_song_video(
     req: SongVideoRequest,
     _admin: str = Depends(verify_admin_token),
 ) -> Dict[str, Any]:
-    """곡의 노래방 영상을 등록합니다 (관리자 전용)."""
-    saved = db.set_song_video(song_id, req.video_id)
-    logger.info(f"Song video registered: {song_id} -> {req.video_id}")
-    return {"data": saved}
+    """곡의 노래방 영상을 등록한다. 관리자 전용."""
+
+    saved = db.set_song_video(
+        song_id,
+        req.video_id,
+    )
+
+    logger.info(
+        "Song video registered: %s -> %s",
+        song_id,
+        req.video_id,
+    )
+
+    return {
+        "data": saved,
+    }
 
 
 @videos_router.delete("/{song_id}")
@@ -329,28 +669,35 @@ async def unregister_song_video(
     song_id: str,
     _admin: str = Depends(verify_admin_token),
 ) -> Dict[str, Any]:
-    """등록을 지우고 기본 후보 목록으로 되돌립니다 (관리자 전용)."""
+    """등록된 영상을 삭제하고 기본 후보 목록으로 되돌린다."""
+
     db.delete_song_video(song_id)
-    return {"data": {"song_id": song_id, "removed": True}}
+
+    return {
+        "data": {
+            "song_id": song_id,
+            "removed": True,
+        },
+    }
 
 
 # ==============================================================================
 # 점수 기록과 랭킹 (부록G §2-④)
-#
-# 기록은 부스 화면이 채점을 마치면 바로 올린다 — 관리자 인증을 걸지 않는다.
-# 전시장에서는 관람객이 직접 부르고 바로 순위에 오르는 것이 이 기능의 전부라,
-# 여기에 인증을 걸면 기능 자체가 성립하지 않는다.
-# 대신 부스 전원이 켜져 있을 때(= PIN으로 인증된 이용 중)만 받는다.
-# 조회는 열어 둔다 — 부스 대형 화면과 관람객 폰이 같은 순위를 봐야 한다.
 # ==============================================================================
 
 @scores_router.post("")
-async def record_score(req: ScoreRecordRequest) -> Dict[str, Any]:
-    """채점 결과를 남기고 대시보드에 실시간으로 알립니다."""
+async def record_score(
+    req: ScoreRecordRequest,
+) -> Dict[str, Any]:
+    """채점 결과를 저장하고 대시보드에 실시간으로 알린다."""
+
     await _require_booth_in_use()
+
     try:
         saved = db.record_score(
-            nickname=(req.nickname or "익명").strip() or "익명",
+            nickname=(
+                (req.nickname or "익명").strip() or "익명"
+            ),
             title=req.title,
             singer=req.singer,
             score=req.score,
@@ -360,12 +707,18 @@ async def record_score(req: ScoreRecordRequest) -> Dict[str, Any]:
             volume=req.volume,
             expression=req.expression,
         )
+
     except Exception as exc:
-        # 점수를 못 남겼다고 해서 부스 화면이 멈추면 안 된다
-        logger.error(f"Failed to record score: {exc}")
+        logger.error(
+            "Failed to record score: %s",
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "SCORE_SAVE_FAILED", "message": "점수를 저장하지 못했습니다."}
+            detail={
+                "code": "SCORE_SAVE_FAILED",
+                "message": "점수를 저장하지 못했습니다.",
+            },
         )
 
     await ws_manager.broadcast({
@@ -373,255 +726,246 @@ async def record_score(req: ScoreRecordRequest) -> Dict[str, Any]:
         "nickname": saved.get("nickname"),
         "title": saved.get("title"),
         "score": saved.get("score"),
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        "timestamp": (
+            datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
     })
-    return {"data": saved}
+
+    return {
+        "data": saved,
+    }
 
 
 @scores_router.get("/top")
 async def list_top_scores(
-    period: str = Query("today", pattern="^(today|all)$"),
-    limit: int = Query(5, ge=1, le=50),
-    title: Optional[str] = Query(None, max_length=100),
-    best: bool = Query(False, description="같은 이름은 최고 기록 하나만"),
+    period: str = Query(
+        "today",
+        pattern="^(today|all)$",
+    ),
+    limit: int = Query(
+        5,
+        ge=1,
+        le=50,
+    ),
+    title: Optional[str] = Query(
+        None,
+        max_length=100,
+    ),
+    best: bool = Query(
+        False,
+        description="같은 이름은 최고 기록 하나만",
+    ),
 ) -> Dict[str, Any]:
-    """오늘의 순위(today) 또는 명예의 전당(all). title 을 주면 그 곡만 (예: 교가).
+    """오늘의 순위 또는 명예의 전당을 조회한다."""
 
-    DB가 없어도 빈 목록으로 degrade한다.
-    """
     try:
-        return {"data": db.get_top_scores(period=period, limit=limit, title=title, best_per_name=best)}
+        return {
+            "data": db.get_top_scores(
+                period=period,
+                limit=limit,
+                title=title,
+                best_per_name=best,
+            ),
+        }
+
     except Exception as exc:
-        logger.error(f"Failed to fetch top scores: {exc}")
-        return {"data": []}
+        logger.error(
+            "Failed to fetch top scores: %s",
+            exc,
+        )
+        return {
+            "data": [],
+        }
 
 
 def _csv_text(value: Any) -> str:
-    """관람객이 적은 글자를 엑셀이 수식(=, +, -, @ 로 시작)으로 실행하지 않게 앞에 ' 를 붙인다."""
+    """
+    엑셀 수식 실행을 방지한다.
+
+    관람객이 입력한 값이 =, +, -, @ 등으로 시작하면
+    앞에 작은따옴표를 붙인다.
+    """
+
     text = "" if value is None else str(value)
-    if text == "-":  # 등급 없음 표시는 그대로
+
+    if text == "-":
         return text
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+    if text[:1] in (
+        "=",
+        "+",
+        "-",
+        "@",
+        "\t",
+        "\r",
+    ):
+        return "'" + text
+
+    return text
 
 
 @scores_router.get("/export")
 async def export_scores(
-    period: str = Query("today", pattern="^(today|all)$"),
-    title: Optional[str] = Query(None, max_length=100),
+    period: str = Query(
+        "today",
+        pattern="^(today|all)$",
+    ),
+    title: Optional[str] = Query(
+        None,
+        max_length=100,
+    ),
     best: bool = Query(True),
     _admin: str = Depends(verify_admin_token),
 ) -> Response:
-    """순위를 CSV 로 내려받는다 (관리자 전용) — 축제 상품 배부용.
-
-    엑셀에서 한글이 깨지지 않게 UTF-8 BOM 을 붙이고, 시각은 부스 시간대로 적는다.
     """
+    순위를 CSV로 내려받는다.
+
+    관리자 전용이며 UTF-8 BOM을 붙여 한글이 깨지지 않도록 한다.
+    """
+
     try:
-        rows = db.get_top_scores(period=period, limit=None, title=title, best_per_name=best)
+        rows = db.get_top_scores(
+            period=period,
+            limit=None,
+            title=title,
+            best_per_name=best,
+        )
+
     except Exception as exc:
-        logger.error(f"Failed to export scores: {exc}")
+        logger.error(
+            "Failed to export scores: %s",
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "EXPORT_FAILED", "message": "기록을 읽지 못했습니다."},
+            detail={
+                "code": "EXPORT_FAILED",
+                "message": "기록을 읽지 못했습니다.",
+            },
         )
+
     buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["순위", "이름", "점수", "등급", "곡", "기록 시각"])
+    writer = csv.writer(buf)
+
+    writer.writerow([
+        "순위",
+        "이름",
+        "점수",
+        "등급",
+        "곡",
+        "기록 시각",
+    ])
+
     tz = booth_now().tzinfo
-    for i, r in enumerate(rows, 1):
-        when = str(r.get("created_at") or "")
+
+    for index, row in enumerate(rows, 1):
+        when = str(
+            row.get("created_at") or ""
+        )
+
         try:
-            when = datetime.fromisoformat(when.replace("Z", "+00:00")).astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
+            when = (
+                datetime.fromisoformat(
+                    when.replace("Z", "+00:00")
+                )
+                .astimezone(tz)
+                .strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+        except (ValueError, TypeError):
             pass
-        w.writerow([i, _csv_text(r.get("nickname")), r.get("score"), _csv_text(r.get("rank_label")),
-                    _csv_text(r.get("title")), when])
-    name = f"scores-{title or 'all'}-{period}-{booth_today()}.csv"
+
+        writer.writerow([
+            index,
+            _csv_text(row.get("nickname")),
+            row.get("score"),
+            _csv_text(row.get("rank_label")),
+            _csv_text(row.get("title")),
+            when,
+        ])
+
+    filename = (
+        f"scores-{title or 'all'}-"
+        f"{period}-{booth_today()}.csv"
+    )
+
     return Response(
         content="\ufeff" + buf.getvalue(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(filename)}"
+            ),
+        },
     )
 
 
 @scores_router.get("/recent")
-async def list_recent_scores(limit: int = Query(10, ge=1, le=50)) -> Dict[str, Any]:
-    """최근 기록 순."""
+async def list_recent_scores(
+    limit: int = Query(
+        10,
+        ge=1,
+        le=50,
+    ),
+) -> Dict[str, Any]:
+    """최근 점수 기록을 조회한다."""
+
     try:
-        return {"data": db.get_recent_scores(limit=limit)}
+        return {
+            "data": db.get_recent_scores(
+                limit=limit
+            ),
+        }
+
     except Exception as exc:
-        logger.error(f"Failed to fetch recent scores: {exc}")
-        return {"data": []}
+        logger.error(
+            "Failed to fetch recent scores: %s",
+            exc,
+        )
+        return {
+            "data": [],
+        }
 
 
 # ==============================================================================
 # 예약 시간 자동 운영 엔진 (부록G §2-①)
-#
-# 상태 조회는 열어 둔다 — 관리자 화면이 "엔진이 살아 있나"를 계속 보여 줘야 한다.
-# 수동 실행은 관리자만 할 수 있다. 시연이나 점검 때 1분을 기다리지 않고
-# 곧바로 한 바퀴 돌려 보기 위한 것이다.
 # ==============================================================================
 
 @scheduler_router.get("/status")
 async def scheduler_status() -> Dict[str, Any]:
-    """엔진 설정·마지막 실행 시각·최근 처리 내역·오늘 남은 일정."""
+    """엔진 설정, 마지막 실행 시각, 최근 처리 내역 및 오늘 남은 일정을 조회한다."""
+
     try:
-        return {"data": scheduler.get_status()}
+        return {
+            "data": scheduler.get_status(),
+        }
+
     except Exception as exc:
-        logger.error(f"Failed to read scheduler status: {exc}")
-        return {"data": {"enabled": False, "last_error": str(exc), "actions": [], "upcoming": []}}
+        logger.error(
+            "Failed to read scheduler status: %s",
+            exc,
+        )
+
+        return {
+            "data": {
+                "enabled": False,
+                "last_error": str(exc),
+                "actions": [],
+                "upcoming": [],
+            },
+        }
 
 
 @scheduler_router.post("/run")
-async def scheduler_run_once(_admin: str = Depends(verify_admin_token)) -> Dict[str, Any]:
-    """지금 즉시 한 바퀴 돌립니다 (관리자 전용)."""
-    result = await scheduler.run_once()
-    return {"data": result}
-
-
-# ==============================================================================
-# 전시 체험 모드 — QR 체험권 + 대기열 (부록G §2-③)
-#
-# 발급과 조회는 인증 없이 열어 둔다. 관람객이 QR을 찍자마자 바로 써야 하는데
-# 여기에 로그인을 붙이면 줄이 더 길어진다.
-# 줄을 건너뛰는 조작(강제 호출·취소)만 관리자 전용이다.
-# ==============================================================================
-
-@experience_router.post("/tickets")
-async def issue_experience_ticket(req: TicketIssueRequest) -> Dict[str, Any]:
-    """QR을 찍은 관람객에게 체험권을 발급합니다."""
-    if not experience.ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "EXPERIENCE_DISABLED", "message": "지금은 체험 모드를 운영하지 않습니다."}
-        )
-    try:
-        ticket = await experience.issue_ticket(req.nickname)
-    except Exception as exc:
-        logger.error(f"Failed to issue experience ticket: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "TICKET_ISSUE_FAILED", "message": "체험권을 발급하지 못했습니다."}
-        )
-    return {"data": ticket}
-
-
-@experience_router.get("/queue")
-async def experience_queue() -> Dict[str, Any]:
-    """대기열 현황 — 부스 대형 화면과 관람객 폰이 같은 것을 봅니다."""
-    return {"data": experience.snapshot()}
-
-
-@experience_router.get("/tickets/{ticket_id}")
-async def experience_ticket(
-    ticket_id: int,
-    request: Request,
-    pin: Optional[str] = None,
-    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
-) -> Dict[str, Any]:
-    """내 체험권 상태와 남은 순번. 관람객 폰이 주기적으로 확인합니다.
-
-    체험권 번호는 1, 2, 3... 으로 이어지므로 남의 번호를 넣어 보는 것은 쉽다.
-    그래서 비밀번호는 발급받을 때 한 번만 알려 주고, 이 조회에서는
-    자기 비밀번호를 같이 보낸 사람(= 실제 체험권 주인)에게만 돌려준다.
-    그러지 않으면 호출된 사람의 비밀번호를 옆에서 읽어 새치기할 수 있다.
-    관리자 화면은 예외다 — 관람객이 폰에서 비밀번호를 놓쳤을 때 선생님이
-    읽어 줄 수 있어야 하므로, 관리자 토큰이 있으면 같이 돌려준다.
-    """
-    try:
-        ticket = db.get_queue_ticket(ticket_id)
-    except Exception as exc:
-        logger.error(f"Failed to read ticket {ticket_id}: {exc}")
-        ticket = None
-
-    if not ticket:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "TICKET_NOT_FOUND", "message": "체험권을 찾을 수 없습니다."}
-        )
-
-    try:
-        same_day = db.get_queue_tickets(str(ticket.get("issued_on"))[:10], list(experience.ACTIVE_STATUSES))
-    except Exception:
-        same_day = []
-
-    safe = {k: v for k, v in ticket.items() if k != "pin_code"}
-    owner = False
-    key = client_key(request)
-    # 맞으면 비밀번호를 돌려주므로 여러 번 넣어 보는 것을 막는다.
-    # 막혀 있을 때도 429 로 돌려보내지는 않는다 — 누가 일부러 틀려서 전체 잠금을
-    # 걸면 모든 관람객 폰의 대기 화면이 멈추기 때문이다. 그동안은 비밀번호 확인만
-    # 하지 않는다 (폰은 발급 때 받아 둔 비밀번호를 그대로 보여 준다).
-    if pin and not ticket_pin_guard.locked(key):
-        owner = secrets.compare_digest(str(pin), str(ticket.get("pin_code") or ""))
-        if owner:
-            ticket_pin_guard.succeed(key)
-        else:
-            ticket_pin_guard.fail(key)
-    if owner or is_valid_admin_token(x_admin_token):
-        safe["pin_code"] = ticket.get("pin_code")
-
-    return {
-        "data": {
-            **safe,
-            "position": experience.position_of(ticket, same_day),
-            "estimated_wait_min": max(0, experience.position_of(ticket, same_day))
-            * experience.EXPERIENCE_MINUTES,
-        }
-    }
-
-
-@experience_router.post("/advance")
-async def experience_advance(_admin: str = Depends(verify_admin_token)) -> Dict[str, Any]:
-    """대기열을 지금 한 칸 굴립니다 (관리자 전용)."""
-    return {"data": {"actions": await experience.advance()}}
-
-
-@experience_router.post("/tickets/{ticket_id}/leave")
-async def experience_leave(
-    ticket_id: int,
-    req: TicketLeaveRequest,
-    request: Request,
-) -> Dict[str, Any]:
-    """관람객이 스스로 줄에서 빠집니다 (/try 의 [체험권 버리기]).
-
-    자기 체험권 비밀번호를 같이 보내야 한다 — 번호만 알아서는 남의 줄을 지우지
-    못한다. 번호가 틀려도 "없는 체험권"과 같은 답을 준다.
-    """
-    key = client_key(request)
-    ticket_pin_guard.check(key)
-    try:
-        ticket = db.get_queue_ticket(ticket_id)
-    except Exception as exc:
-        logger.error(f"Failed to read ticket {ticket_id}: {exc}")
-        ticket = None
-
-    if not ticket or not secrets.compare_digest(req.pin, str(ticket.get("pin_code") or "")):
-        if ticket:
-            ticket_pin_guard.fail(key)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "TICKET_NOT_FOUND", "message": "체험권을 찾을 수 없습니다."}
-        )
-    ticket_pin_guard.succeed(key)
-
-    if str(ticket.get("status")) == "active":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "TICKET_IN_USE",
-                "message": "지금 체험 중이라 버릴 수 없습니다. 시간이 끝나면 자동으로 정리됩니다.",
-            },
-        )
-    left = await experience.leave_ticket(ticket)
-    return {"data": {"ticket_id": ticket_id, "left": left}}
-
-
-@experience_router.post("/tickets/{ticket_id}/cancel")
-async def experience_cancel(
-    ticket_id: int,
+async def scheduler_run_once(
     _admin: str = Depends(verify_admin_token),
 ) -> Dict[str, Any]:
-    """체험권을 취소합니다 (관리자 전용). 취소 후 다음 사람을 호출합니다."""
-    db.update_ticket_status(ticket_id, "expired")
-    await experience.advance()
-    return {"data": {"ticket_id": ticket_id, "cancelled": True}}
+    """스케줄러를 즉시 한 번 실행한다. 관리자 전용."""
+
+    result = await scheduler.run_once()
+
+    return {
+        "data": result,
+    }
