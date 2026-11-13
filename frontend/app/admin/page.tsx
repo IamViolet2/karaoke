@@ -10,6 +10,8 @@ import React, {
 import Link from "next/link";
 import { Monitor, Home, RefreshCw } from "lucide-react";
 
+import { CctvPanel } from "@/components/admin/CctvPanel";
+
 import { AppHeader } from "@/components/layout/AppHeader";
 import { AdminGate } from "@/components/booth/AdminGate";
 import { VirtualBoothSimulator } from "@/components/booth/VirtualBoothSimulator";
@@ -432,6 +434,8 @@ export default function AdminPage() {
               isConnected={isConnected}
             />
 
+            <CctvPanel />
+
             <SchedulerPanel />
 
             <AnthemRankingPanel />
@@ -478,3 +482,4 @@ export default function AdminPage() {
     </div>
   );
 }
+  

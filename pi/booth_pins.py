@@ -3,16 +3,15 @@ booth_pins.py
 --------------------------------------------------------------------------------
 [노래방 부스 GPIO 핀 배치 — 하나뿐인 진실(single source of truth)]
 
-핀 번호를 여러 파일에 복사해 두면 반드시 어긋납니다. 실제로 이 프로젝트에서도
-문서(부록A)와 자가진단 스크립트의 핀 번호가 달라, GPIO27을 LED로 알고 배선하면
-220V 전원 릴레이를 건드리게 되는 상태였습니다.
+핀 번호를 여러 파일에 복사해 두면 반드시 어긋납니다.
+그래서 핀 번호는 이 파일에만 적습니다.
 
-그래서 핀 번호는 **이 파일에만** 적습니다.
   - test_hardware_gpio.py (배선 자가진단)
   - main.py               (실제 데몬)
+
 둘 다 여기서 가져다 씁니다. 배선을 바꾸면 이 파일 한 곳만 고치면 됩니다.
 
-번호는 모두 **BCM 기준**입니다 (물리 핀 번호가 아닙니다).
+번호는 모두 BCM 기준입니다 (물리 핀 번호가 아닙니다).
 --------------------------------------------------------------------------------
 """
 
@@ -20,15 +19,16 @@ import os
 
 # ── 액추에이터 ────────────────────────────────────────────────────────────
 DOOR_LOCK_PIN = 17    # 솔레노이드 도어락 (릴레이 1채널)
-RELAY_POWER_PIN = 27  # 반주기/앰프 220V 기기 전원 릴레이 (⚠️ LED 아님)
+RELAY_POWER_PIN = 27  # 반주기/앰프 220V 기기 전원 릴레이
 LED_PIN = 22          # 부스 실내 LED 조명 바
+FAN_PIN = 18          # 선풍기 릴레이 (HIGH=ON, LOW=OFF)
 
 # ── 센서 ──────────────────────────────────────────────────────────────────
-PIR_PIN = 24                          # 인체 감지 센서 (PIR)
-KEYPAD_ROW_PINS = [5, 6, 13, 19]      # 4x4 매트릭스 키패드 행(row)
-KEYPAD_COL_PINS = [26, 16, 20, 21]    # 4x4 매트릭스 키패드 열(column)
+PIR_PIN = 24
+KEYPAD_ROW_PINS = [5, 6, 13, 19]
+KEYPAD_COL_PINS = [26, 16, 20, 21]
 
-# 키패드 각 자리에 새겨진 글자 (행 × 열 순서가 위 핀 순서와 같아야 합니다)
+# 키패드 각 자리에 새겨진 글자
 KEYPAD_LAYOUT = [
     ["1", "2", "3", "A"],
     ["4", "5", "6", "B"],
@@ -38,16 +38,12 @@ KEYPAD_LAYOUT = [
 
 # ── 릴레이 극성 ───────────────────────────────────────────────────────────
 #
-# ⚠️ 배선 전에 반드시 확인하세요.
+# 도어락 및 노래방 전원 릴레이의 극성 설정입니다.
+# 선풍기는 별도로 HIGH=ON, LOW=OFF로 고정합니다.
 #
-# 시중 릴레이 모듈 상당수는 LOW-level trigger(LOW일 때 릴레이 ON)입니다.
-# 그런 보드에 active_high=True를 쓰면, 스크립트가 켜지는 순간 GPIO가 LOW라서
-# 도어락과 220V 전원이 곧바로 붙어 버립니다. 문이 열린 채로, 반주기에 전원이
-# 들어간 채로 시작한다는 뜻이라 위험합니다.
-#
-# 보드 설명서에 'Low Level Trigger'라고 적혀 있거나 동작이 반대로 나오면
-# pi/.env 에 RELAY_ACTIVE_HIGH=false 를 넣으세요.
-RELAY_ACTIVE_HIGH = os.getenv("RELAY_ACTIVE_HIGH", "true").strip().lower() != "false"
+RELAY_ACTIVE_HIGH = (
+    os.getenv("RELAY_ACTIVE_HIGH", "true").strip().lower() != "false"
+)
 
 
 def describe() -> str:
@@ -56,6 +52,7 @@ def describe() -> str:
         f"  🚪 도어락        GPIO {DOOR_LOCK_PIN}\n"
         f"  ⚡ 전원 릴레이    GPIO {RELAY_POWER_PIN}  (220V — 취급 주의)\n"
         f"  💡 조명 LED      GPIO {LED_PIN}\n"
+        f"  🌀 선풍기 릴레이  GPIO {FAN_PIN}  (HIGH=ON / LOW=OFF)\n"
         f"  👀 PIR 센서      GPIO {PIR_PIN}\n"
         f"  🔢 키패드 행      GPIO {KEYPAD_ROW_PINS}\n"
         f"  🔢 키패드 열      GPIO {KEYPAD_COL_PINS}\n"

@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
@@ -54,7 +53,6 @@ type YoutubeTestStatus = "untested" | "testing" | "success" | "failed";
 
 // ----------------------------------------------------------------------
 // 대기 / 인증 화면
-// 키패드 화면은 기존의 차분한 분위기를 유지한다.
 // ----------------------------------------------------------------------
 
 interface AttractScreenProps {
@@ -126,6 +124,8 @@ const AttractScreen = ({
 // ----------------------------------------------------------------------
 
 interface KaraokeRoomSectionProps {
+  /** /door에서 인증과 실제 도어락 열림이 확인된 뒤 /booth에서만 true */
+  externalEntryMode?: boolean;
   devices?: Device[];
   onSongCompleted?: () => void;
   topToday?: ScoreRecord[];
@@ -138,6 +138,7 @@ interface KaraokeRoomSectionProps {
 }
 
 export function KaraokeRoomSection({
+  externalEntryMode = false,
   devices = [],
   onSongCompleted,
   topToday = [],
@@ -156,15 +157,14 @@ export function KaraokeRoomSection({
 
   // ── 인증 & 입장 ──────────────────────────────────────────
 
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [hasEntered, setHasEntered] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(externalEntryMode);
+  const [hasEntered, setHasEntered] = useState(externalEntryMode);
   const [isEntering, setIsEntering] = useState(false);
   const [nickname, setNickname] = useState("");
   const [enterNotice, setEnterNotice] = useState<string | null>(null);
 
   const lastAuthNoticeSeqRef = useRef(authNotice?.seq ?? 0);
 
-  // 화면 키패드 요청 직후 도착하는 서버 방송은 해당 요청의 지연 응답일 수 있다.
   const lastScreenAuthAttemptRef = useRef(0);
   const SCREEN_AUTH_NOTICE_GUARD_MS = 30_000;
 
@@ -218,7 +218,7 @@ export function KaraokeRoomSection({
   const [animatedScore, setAnimatedScore] = useState(0);
 
   const [recordStatus, setRecordStatus] = useState<
-    "excluded" | "saving" | "saved" | "failed" | null
+    "no_singing" | "excluded" | "saving" | "saved" | "failed" | null
   >(null);
 
   // ── refs ─────────────────────────────────────────────────
@@ -264,7 +264,6 @@ export function KaraokeRoomSection({
 
   // ─────────────────────────────────────────────────────────
   // 물리 키패드 인증 결과 처리
-  // 화면 키패드 요청 직후의 지연 서버 알림은 무시한다.
   // ─────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -352,7 +351,7 @@ export function KaraokeRoomSection({
   }, []);
 
   // ─────────────────────────────────────────────────────────
-  // DB 기록 및 채점
+  // DB 기록
   // ─────────────────────────────────────────────────────────
 
   const recordSongToDB = useCallback(
@@ -367,7 +366,10 @@ export function KaraokeRoomSection({
           }),
         });
 
-        onSongCompleted?.();
+        if (res.ok) {
+          onSongCompleted?.();
+        }
+
         return res.ok;
       } catch {
         return false;
@@ -395,7 +397,10 @@ export function KaraokeRoomSection({
           }),
         });
 
-        onScoreRecorded?.();
+        if (res.ok) {
+          onScoreRecorded?.();
+        }
+
         return res.ok;
       } catch {
         return false;
@@ -404,25 +409,33 @@ export function KaraokeRoomSection({
     [nickname, onScoreRecorded]
   );
 
+  // ─────────────────────────────────────────────────────────
+  // 노래 종료 및 즉시 채점
+  // ─────────────────────────────────────────────────────────
+
   const finishAndScore = useCallback(() => {
+    // 중복 호출 방지
     if (scoredRef.current) return;
 
     scoredRef.current = true;
 
+    // 재생과 분석을 정지하고 현재까지 수집된 데이터로 채점
     stopAllPlayback();
-    setIsCalculatingScore(true);
+    scorerRef.current?.pauseAnalysis();
+
     setShowScoreModal(true);
+    setIsCalculatingScore(true);
     setAnimatedScore(0);
     setRecordStatus(null);
 
-    KaraokeAudioScorer.playDrumrollSound();
-
     const virtual = usedVirtualRef.current;
 
+    // 가상보컬을 사용했다면 무조건 100점
     const result: FinalScore = virtual
       ? {
           score: 100,
-          comment: "가상보컬로 완벽하게 불렀습니다!",
+          comment:
+            "가상보컬을 사용하여 채점했습니다. 가상보컬 점수는 100점입니다.",
           rank: "PERFECT",
           breakdown: {
             pitch: 100,
@@ -445,54 +458,83 @@ export function KaraokeRoomSection({
           sangSomething: false,
         };
 
-    setFinalScore(result);
+    // 실제 노래를 부르지 않았다면 무조건 0점
+    if (!result.sangSomething) {
+      const noSingingResult: FinalScore = {
+        ...result,
+        score: 0,
+        comment: "노래가 감지되지 않았습니다. 점수는 0점입니다.",
+        rank: "NO SINGING",
+        sangSomething: false,
+        breakdown: {
+          pitch: 0,
+          timing: 0,
+          volume: 0,
+          expression: 0,
+        },
+      };
 
-    let current = 0;
-    const step = Math.max(1, Math.ceil(result.score / 25));
+      setFinalScore(noSingingResult);
+      setAnimatedScore(0);
+      setIsCalculatingScore(false);
+      setRecordStatus("no_singing");
 
-    const counter = setInterval(() => {
-      current = Math.min(result.score, current + step);
-      setAnimatedScore(current);
+      return;
+    }
 
-      if (current >= result.score) {
-        clearInterval(counter);
-        setIsCalculatingScore(false);
+    // 실제로 노래를 불렀다면 점수 범위를 15~100점으로 제한
+    const boundedScore = Math.max(
+      15,
+      Math.min(100, Math.round(result.score))
+    );
 
-        if (result.sangSomething) {
-          KaraokeAudioScorer.playFanfareSound();
+    const finalResult: FinalScore = {
+      ...result,
+      score: boundedScore,
+      sangSomething: true,
+    };
 
-          if (
-            typeof window !== "undefined" &&
-            "speechSynthesis" in window
-          ) {
-            try {
-              window.speechSynthesis.cancel();
+    setFinalScore(finalResult);
 
-              const utt = new SpeechSynthesisUtterance(
-                `${result.score}점입니다! ${result.comment}`
-              );
+    // 점수 카운트 애니메이션 없이 즉시 표시
+    setAnimatedScore(boundedScore);
+    setIsCalculatingScore(false);
 
-              utt.lang = "ko-KR";
-              utt.rate = 1.05;
-              window.speechSynthesis.speak(utt);
-            } catch {}
-          }
+    // 가상보컬 점수는 DB에 저장하지 않음
+    if (virtual) {
+      setRecordStatus("excluded");
+    } else {
+      setRecordStatus("saving");
 
-          if (virtual) {
-            setRecordStatus("excluded");
-          } else {
-            setRecordStatus("saving");
+      void Promise.all([
+        recordSongToDB(selectedSong),
+        recordScoreToDB(selectedSong, finalResult),
+      ]).then(([songSaved, scoreSaved]) => {
+        setRecordStatus(
+          songSaved && scoreSaved ? "saved" : "failed"
+        );
+      });
+    }
 
-            void Promise.all([
-              recordSongToDB(selectedSong),
-              recordScoreToDB(selectedSong, result),
-            ]).then(([song, score]) =>
-              setRecordStatus(song && score ? "saved" : "failed")
-            );
-          }
-        }
-      }
-    }, 40);
+    // 실제 노래를 부른 경우에만 효과음과 음성 안내
+    KaraokeAudioScorer.playFanfareSound();
+
+    if (
+      typeof window !== "undefined" &&
+      "speechSynthesis" in window
+    ) {
+      try {
+        window.speechSynthesis.cancel();
+
+        const utt = new SpeechSynthesisUtterance(
+          `${boundedScore}점입니다! ${finalResult.comment}`
+        );
+
+        utt.lang = "ko-KR";
+        utt.rate = 1.05;
+        window.speechSynthesis.speak(utt);
+      } catch {}
+    }
   }, [
     recordSongToDB,
     recordScoreToDB,
@@ -712,10 +754,12 @@ export function KaraokeRoomSection({
     scoredRef.current = false;
     usedVirtualRef.current = false;
 
-    setIsAuthenticated(false);
-    setHasEntered(false);
-    setIsEntering(false);
-    setEnterNotice(null);
+    if (!externalEntryMode) {
+      setIsAuthenticated(false);
+      setHasEntered(false);
+      setIsEntering(false);
+      setEnterNotice(null);
+    }
 
     setElapsed(0);
     setPlayerError(null);
@@ -729,6 +773,7 @@ export function KaraokeRoomSection({
   }, [
     isPowerOn,
     hasEntered,
+    externalEntryMode,
     stopAllPlayback,
     stopVirtualMic,
   ]);
@@ -968,6 +1013,21 @@ export function KaraokeRoomSection({
 
     setIsPlaying(true);
     startTicker();
+
+    // 반주가 시작된 직후 1.5초간 주변 소음 기준을 측정한다.
+    // 측정 중에는 채점 데이터를 누적하지 않는다.
+    // 실제 마이크 분석이 실행 중일 때만 측정한다.
+    if (scorerRef.current?.isRunning) {
+      void scorerRef.current.measureBaseline(1500).then(
+        ({ baseline, threshold }) => {
+          console.info(
+            `[노래방 채점] 반주 소음 측정 완료: 기준 음량=${baseline}, 발성 임계값=${threshold}`
+          );
+        }
+      ).catch((error) => {
+        console.warn("[노래방 채점] 반주 소음 측정 실패", error);
+      });
+    }
   }, [
     media,
     isPowerOn,
@@ -1006,6 +1066,11 @@ export function KaraokeRoomSection({
     setIsEntering(false);
     setHasEntered(true);
   }, [isAuthenticated, isEntering, isPowerOn, startMicrophone]);
+
+  useEffect(() => {
+    if (!externalEntryMode || !hasEntered || !isPowerOn) return;
+    void startMicrophone();
+  }, [externalEntryMode, hasEntered, isPowerOn, startMicrophone]);
 
   // ─────────────────────────────────────────────────────────
   // 곡 선택
@@ -1100,9 +1165,9 @@ export function KaraokeRoomSection({
 
   return (
     <div className="min-h-screen">
-      {/* 1. 인증 화면: 메인 노래방 화면과 완전히 분리 */}
+      {/* 1. 인증 화면 */}
 
-      {!hasEntered && (
+      {!externalEntryMode && !hasEntered && (
         <AttractScreen
           authenticated={isAuthenticated}
           isPowerOn={isPowerOn}
@@ -1124,7 +1189,6 @@ export function KaraokeRoomSection({
 
       {hasEntered && (
         <div className="relative min-h-screen overflow-hidden bg-[#070812] text-white">
-          {/* 다층 앰비언트 조명 */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <div className="absolute -top-64 left-[12%] h-[650px] w-[650px] rounded-full bg-indigo-500/20 blur-[145px]" />
             <div className="absolute -top-48 right-[-8%] h-[650px] w-[650px] rounded-full bg-fuchsia-500/15 blur-[155px]" />
@@ -1679,6 +1743,12 @@ export function KaraokeRoomSection({
                 </p>
               )}
 
+              {!isCalculatingScore && recordStatus === "no_singing" && (
+                <p className="text-xs text-rose-300">
+                  노래가 감지되지 않아 0점 처리되었습니다. 점수는 기록되지 않습니다.
+                </p>
+              )}
+
               {!isCalculatingScore && recordStatus === "saving" && (
                 <p className="text-xs text-violet-300">
                   점수 기록을 저장하고 있습니다.
@@ -1699,7 +1769,7 @@ export function KaraokeRoomSection({
 
               {!isCalculatingScore && recordStatus === "excluded" && (
                 <p className="text-xs text-slate-400">
-                  가상보컬 점수는 기록에서 제외됩니다.
+                  가상보컬을 사용하여 100점으로 채점했습니다. 가상보컬 점수는 DB 기록에서 제외됩니다.
                 </p>
               )}
 

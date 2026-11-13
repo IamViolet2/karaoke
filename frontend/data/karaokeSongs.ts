@@ -1,4 +1,3 @@
-
 /**
  * 학교 노래방 부스 — 선곡 목록
  *
@@ -10,7 +9,16 @@
  *   신규 추가곡은 확보한 유튜브 후보를 등록 순서대로 시도한다.
  *   모든 유튜브 후보가 실패하면 내장 신스 반주로 전환한다.
  *
+ * 영상 기준:
+ *   원곡의 키를 변경한 영상만 후보에서 제외한다.
+ *   일반 노래방, 멜로디 제거, MR Live, Instrumental Karaoke,
+ *   코러스 영상 등은 키 변경 영상이 아니라면 후보로 허용한다.
+ *
  * 실제 유튜브 송출 테스트에 실패한 곡은 목록에서 삭제한다.
+ *
+ * 보류 곡:
+ *   영상 후보를 확보했지만 실제 부스 송출 및 키 확인이 끝나지 않은 곡이다.
+ *   후보 등록은 송출 성공을 의미하지 않는다.
  */
 
 import {
@@ -957,37 +965,6 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
   },
 
   // ============================================================
-  // 디지몬 어드벤처 OST
-  // ============================================================
-
-  {
-    id: "digimon-butterfly",
-    title: "Butter-Fly",
-    singer: "전영호",
-    genre: "애니메이션 OST / 록",
-    tag: "애니메이션 OST",
-    year: 1999,
-    pickReason:
-      "디지몬 어드벤처의 대표 주제가로, 세대를 아우르는 애니메이션 OST 선곡을 위해 추가했다.",
-    // 곡 번호 출처: 금영(KY)
-    songNumber: "51714",
-    songNumberSource: "KY",
-    youtubeCandidates: [
-      "GWewp1QplR0", // 사용자 제공 새 노래방 영상 후보
-    ],
-    youtubeSearchQuery: "전영호 Butter-Fly 디지몬 노래방",
-    localMediaExt: null,
-    license: "youtube-embed",
-    mr: {
-      bpm: 165,
-      style: "rock",
-      progression: "I-V-vi-IV",
-      tonic: 293.66,
-    },
-    approxDurationSec: 245,
-  },
-
-  // ============================================================
   // 신규 추가곡 30곡
   // ============================================================
 
@@ -997,22 +974,15 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
 
   ...[
     createNewSong({
-      id: "geon-aniya-pt1",
-      title: "걘 아니야 Pt.1",
-      singer: "이영지",
-      genre: "힙합",
-      year: 2021,
-      pickReason: "국내 힙합 선곡을 다양화하기 위해 추가했다.",
-      youtubeSearchQuery: "걘 아니야 Pt.1 노래방",
-      style: "dance",
-    }),
-    createNewSong({
       id: "geon-aniya-pt2",
       title: "걘 아니야 Pt.2",
-      singer: "이영지",
+      singer: "페노메코",
       genre: "힙합",
       year: 2021,
       pickReason: "Pt.1과 함께 선곡할 수 있도록 후속 곡을 추가했다.",
+      youtubeCandidates: [
+        "BaSQdmVDUpU", // KY 일반 노래방 영상
+      ],
       youtubeSearchQuery: "걘 아니야 Pt.2 노래방",
       style: "dance",
     }),
@@ -1025,18 +995,14 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "태연의 대표적인 감성 팝 곡으로 추가했다.",
       songNumber: "85413",
       songNumberSource: "TJ",
+      youtubeCandidates: [
+        "HldgzA0cRTI", // TJ 일반 노래방
+        "HrdmexH3JcI", // 멜로디 제거
+        "2o9zf6jGzlw", // MR Live
+        "DhBlQUHh2kg", // KY 노래방
+      ],
       youtubeSearchQuery: "태연 To. X 노래방",
       style: "ballad",
-    }),
-    createNewSong({
-      id: "taeyeon-i",
-      title: "I",
-      singer: "태연",
-      genre: "팝 / 록",
-      year: 2015,
-      pickReason: "태연의 대표 솔로곡으로 다양한 세대의 선곡을 고려해 추가했다.",
-      youtubeSearchQuery: "태연 I 노래방",
-      style: "rock",
     }),
     createNewSong({
       id: "ii-honeychurros",
@@ -1047,7 +1013,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "인터넷 음악과 버추얼 아티스트 음악 선곡을 다양화하기 위해 추가했다.",
       songNumber: "84096",
       songNumberSource: "TJ",
-      youtubeCandidates: ["PnLzYigLYu8"],
+      youtubeCandidates: [
+        "vb9tI_BOc-8", // TJ 노래방
+        "cdK88Q8Uu8w", // Instrumental Karaoke
+      ],
       youtubeSearchQuery: "허니츄러스 ii 아이아이 노래방",
     }),
     createNewSong({
@@ -1059,7 +1028,13 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "밝고 경쾌한 분위기의 아이돌 곡으로 추가했다.",
       songNumber: "51028",
       songNumberSource: "KY",
-      youtubeCandidates: ["NOiyDlWl534"],
+      youtubeCandidates: [
+        "O33kzpp0mxY", // TJ 일반 노래방
+        "cg_KzTZcrNY", // MR Live
+        "LMRIVRaDzNM", // KY 노래방
+        "4dc97sFscLU", // 멜로디 제거
+        "xLCuqZWAfC0", // 코러스
+      ],
       youtubeSearchQuery: "최예나 캐치캐치 노래방",
     }),
     createNewSong({
@@ -1071,7 +1046,11 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "최예나의 대중적인 댄스곡으로 선곡 폭을 넓히기 위해 추가했다.",
       songNumber: "71633",
       songNumberSource: "KY",
-      youtubeCandidates: ["MPp8hbuZwW0"],
+      youtubeCandidates: [
+        "UunnvsXpjkI", // 사용자 제공 후보 1 — 보류
+        "iaOUIMQH9B4", // 사용자 제공 후보 2 — 보류
+        "6SOtimGe4SU", // 사용자 제공 후보 3 — 보류
+      ],
       youtubeSearchQuery: "최예나 네모네모 노래방",
     }),
     createNewSong({
@@ -1084,6 +1063,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       // 곡 번호 출처: 금영(KY) — 사용자 제공 번호
       songNumber: "80600",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "bBfOsYKLv2g", // TJ 노래방
+        "A-Hl64_FnFw", // KY 노래방
+      ],
       youtubeSearchQuery: "오반 입장차이 노래방",
       style: "ballad",
     }),
@@ -1096,20 +1079,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "하현상의 대표적인 감성 곡으로 추가했다.",
       songNumber: "99496",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "8kAcwfGMVhU", // 사용자 제공 후보 1 — 보류
+        "yC6bDvQfgwg", // 사용자 제공 후보 2 — 보류
+      ],
       youtubeSearchQuery: "하현상 등대 노래방",
       style: "ballad",
-    }),
-    createNewSong({
-      id: "bewhy-transcend",
-      title: "초월",
-      singer: "비와이",
-      genre: "힙합",
-      year: 2022,
-      pickReason: "국내 힙합 장르의 선곡을 다양화하기 위해 추가했다.",
-      songNumber: "24028",
-      songNumberSource: "TJ",
-      youtubeSearchQuery: "비와이 초월 노래방",
-      style: "dance",
     }),
     createNewSong({
       id: "wing-dopamine",
@@ -1121,7 +1096,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       // 곡 번호 출처: 금영(KY) — 사용자 제공 번호
       songNumber: "56304",
       songNumberSource: "KY",
-      youtubeCandidates: ["OuQtwZtyi3k", "ygyEi8jYpdU"],
+      youtubeCandidates: [
+        "OuQtwZtyi3k",
+        "ygyEi8jYpdU",
+      ],
       youtubeSearchQuery: "WING Dopamine 노래방",
     }),
     createNewSong({
@@ -1133,6 +1111,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "쏜애플 특유의 밴드 사운드를 즐길 수 있는 인디 록 곡으로 추가했다.",
       songNumber: "29898",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "X8ta68_WXBE", // 사용자 제공 후보 1
+        "S02hXVsXC4M", // 사용자 제공 후보 2
+        "wsRYyK2BrV0", // 사용자 제공 후보 3
+        "kyPfFQUiZDo", // 사용자 제공 후보 4
+      ],
       youtubeSearchQuery: "쏜애플 시퍼런 봄 노래방",
       style: "rock",
     }),
@@ -1145,6 +1129,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "쏜애플의 대표곡 중 하나로 인디 록 선곡을 보강하기 위해 추가했다.",
       songNumber: "75553",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "f26sOKPu0D4", // 사용자 제공 후보 1
+        "WbPlAAXHkTQ", // 사용자 제공 후보 2
+        "9tFTTntWjiQ", // 사용자 제공 후보 3
+        "wL0J2sfxlBo", // 사용자 제공 후보 4
+      ],
       youtubeSearchQuery: "쏜애플 남극 노래방",
       style: "rock",
     }),
@@ -1157,6 +1147,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "쏜애플의 음악을 추가해 국내 인디 밴드 선곡을 다양화했다.",
       songNumber: "70831",
       songNumberSource: "TJ",
+      youtubeCandidates: [
+        "L9elJ0KCvsc", // 사용자 제공 후보 1
+        "bNtWt0hirms", // 사용자 제공 후보 2
+      ],
       youtubeSearchQuery: "쏜애플 쇠퇴론 노래방",
       style: "rock",
     }),
@@ -1169,6 +1163,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "쏜애플의 인디 록 곡으로 밴드 음악 선곡을 보강했다.",
       songNumber: "70924",
       songNumberSource: "TJ",
+      youtubeCandidates: [
+        "UAmJewnGxe0", // 사용자 제공 후보 1
+        "3CMBmTl6zqg", // 사용자 제공 후보 2
+      ],
       youtubeSearchQuery: "쏜애플 아카시아 노래방",
       style: "rock",
     }),
@@ -1182,6 +1180,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       // 곡 번호 출처: 금영(KY) — 사용자 제공 번호
       songNumber: "97108",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "TrykmXVIqDk", // KY 일반 노래방 영상
+        "MUulHW3Hw2Q", // KY SEMI LIVE 영상
+      ],
       youtubeSearchQuery: "실리카겔 NO PAIN 노래방",
       style: "rock",
     }),
@@ -1195,21 +1197,10 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       // 곡 번호 출처: TJ 노래방(TJ) — 사용자 제공 번호
       songNumber: "84905",
       songNumberSource: "TJ",
+      youtubeCandidates: [
+        "EPgo_0ePCWY", // KY 멜로디 제거 영상
+      ],
       youtubeSearchQuery: "터치드 Highlight 노래방",
-      style: "rock",
-    }),
-    createNewSong({
-      id: "touched-love-is-dangerous",
-      title: "Love is dangerous",
-      singer: "터치드",
-      genre: "인디 / 록",
-      year: 2024,
-      pickReason: "터치드의 곡으로 밴드 음악 선곡을 보강하기 위해 추가했다.",
-      // 곡 번호 출처: TJ 노래방 — 사용자 제공 번호, 곡명 일치 여부 재확인 필요
-      songNumber: "50398",
-      songNumberSource: "TJ",
-      youtubeCandidates: ["Jbu6-gZfApk"],
-      youtubeSearchQuery: "터치드 Love is dangerous 노래방",
       style: "rock",
     }),
   ],
@@ -1229,7 +1220,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "보컬로이드와 일본 음악을 즐기는 이용자를 위해 추가했다.",
       songNumber: "44091",
       songNumberSource: "KY",
-      youtubeCandidates: ["l9eKWIURgXs"],
+      youtubeCandidates: [
+        "QOKwBKvFISI", // 사용자 제공 후보 1
+        "DEcJTidALhM", // 사용자 제공 후보 2
+        "IOxK4bcxS9Y", // 사용자 제공 후보 3
+        "SZGCEgFeUrI", // 사용자 제공 후보 4
+      ],
       youtubeSearchQuery: "Orangestar 내일의 밤하늘 초계반 노래방",
       style: "rock",
     }),
@@ -1243,6 +1239,11 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "최근 보컬로이드 음악의 인기를 반영해 추가했다.",
       songNumber: "57747",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "DfJbEfl9u64", // 사용자 제공 후보 1
+        "tUD8w7uT2H0", // 사용자 제공 후보 2
+        "rm6h8jf23kc", // 사용자 제공 후보 3
+      ],
       youtubeSearchQuery: "メズマライザー 노래방 カラオケ",
       style: "dance",
     }),
@@ -1256,6 +1257,9 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "오래 사랑받는 보컬로이드 곡으로 선곡 폭을 넓히기 위해 추가했다.",
       songNumber: "44010",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "mzSxZM6jwNk", // 사용자와 함께 찾은 노래방 영상 후보
+      ],
       youtubeSearchQuery: "自傷無色 노래방 カラオケ",
       style: "ballad",
     }),
@@ -1267,28 +1271,20 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
 
   ...[
     createNewSong({
-      id: "airi-kanna-final",
-      title: "최종화",
-      singer: "아이리 칸나",
-      genre: "버추얼 아티스트 / 발라드",
-      tag: "버추얼",
-      year: 2024,
-      pickReason: "버추얼 아티스트 음악 선곡을 다양화하기 위해 추가했다.",
-      songNumber: "80603",
-      songNumberSource: "KY",
-      youtubeSearchQuery: "아이리 칸나 최종화 노래방",
-      style: "ballad",
-    }),
-    createNewSong({
       id: "neneko-mashiro-spring-dream",
       title: "봄꿈",
       singer: "네네코 마시로",
       genre: "버추얼 아티스트 / 발라드",
       tag: "버추얼",
       year: 2024,
-      pickReason: "버추얼 아티스트의 감성적인 곡으로 선곡을 보강했다.",
+      pickReason: "네네코 마시로의 감성적인 곡으로 선곡을 보강했다.",
       songNumber: "71052",
       songNumberSource: "TJ",
+      youtubeCandidates: [
+        "LBx1rbDCKp4", // 사용자 제공 후보 1
+        "XukVlqciMig", // 사용자 제공 후보 2
+        "Vzv6pplwrQk", // 사용자 제공 후보 3
+      ],
       youtubeSearchQuery: "네네코 마시로 봄꿈 노래방",
       style: "ballad",
     }),
@@ -1302,19 +1298,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "밝은 분위기의 버추얼 아티스트 곡으로 추가했다.",
       songNumber: "99555",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "X8pmUqNjGWQ", // 사용자 제공 후보 1
+        "YnG85qSqYjw", // 사용자 제공 후보 2
+        "x59bVXvb5po", // 사용자 제공 후보 3
+      ],
       youtubeSearchQuery: "아야츠노 유니 내꺼 하는 법 노래방",
-    }),
-    createNewSong({
-      id: "aokumo-rin-maid-my-way",
-      title: "Maid My Way",
-      singer: "아오쿠모 린",
-      genre: "버추얼 아티스트 / 팝",
-      tag: "버추얼",
-      year: 2024,
-      pickReason: "버추얼 아티스트 음악 선곡을 확장하기 위해 추가했다.",
-      songNumber: "51798",
-      songNumberSource: "KY",
-      youtubeSearchQuery: "아오쿠모 린 Maid My Way 노래방",
     }),
   ],
 
@@ -1332,6 +1321,12 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "세대를 아우르는 국내 힙합 대표곡으로 추가했다.",
       songNumber: "84559",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "d__CIgL0mYg",
+        "jtH_XsRlJ3c",
+        "lBs3pyRt0mE",
+        "uZRC95MSmjM",
+      ],
       youtubeSearchQuery: "다이나믹 듀오 죽일 놈 노래방",
       style: "dance",
     }),
@@ -1352,6 +1347,9 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "Mrs. GREEN APPLE의 초기 대표곡으로 일본 밴드 음악 선곡을 보강했다.",
       songNumber: "44894",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "ypbsN94m-XY", // 歌っちゃ王 노래방 영상
+      ],
       youtubeSearchQuery: "Mrs GREEN APPLE 나라는 것 노래방",
       style: "rock",
     }),
@@ -1365,6 +1363,9 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "애니메이션 주제가로 잘 알려진 대표적인 일본 록 곡으로 추가했다.",
       songNumber: "44455",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "pEHqefeM4S4", // 歌っちゃ王 노래방 영상
+      ],
       youtubeSearchQuery: "Mrs GREEN APPLE Inferno 노래방",
       style: "rock",
     }),
@@ -1378,6 +1379,9 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "최근 큰 인기를 얻은 Mrs. GREEN APPLE의 대표곡으로 추가했다.",
       songNumber: "75996",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "vD_DRK_e_a8", // Katsuhide Music 노래방 영상
+      ],
       youtubeSearchQuery: "Mrs GREEN APPLE ライラック 노래방",
       style: "rock",
     }),
@@ -1391,6 +1395,9 @@ export const KARAOKE_SONGS: KaraokeSong[] = [
       pickReason: "밝고 경쾌한 일본 팝 곡으로 선곡 분위기를 다양화하기 위해 추가했다.",
       songNumber: "44808",
       songNumberSource: "KY",
+      youtubeCandidates: [
+        "wppUMLLkWTg", // 歌っちゃ王 노래방 영상
+      ],
       youtubeSearchQuery: "Mrs GREEN APPLE Dance Hall 노래방",
     }),
   ],

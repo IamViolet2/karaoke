@@ -161,6 +161,7 @@ INSERT INTO devices (id, name, kind) VALUES
   ('relay_1', '기기 전원 릴레이', 'relay'),
   ('led_1', '부스 조명 LED', 'led'),
   ('speaker_1', '스피커/오디오 모듈', 'speaker'),
+    ('fan_1', '부스 선풍기', 'fan'),
   -- 센서 목록
   ('keypad_1', '4x4 비밀번호 키패드', 'keypad'),
   ('pir_1', '입장 감지 센서', 'pir')

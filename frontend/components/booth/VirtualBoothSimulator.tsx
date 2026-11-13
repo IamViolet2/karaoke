@@ -8,6 +8,7 @@ import {
   Unlock,
   Power,
   Lightbulb,
+  LightbulbOff,
   Volume2,
   VolumeX,
   UserCheck,
@@ -15,32 +16,46 @@ import {
   PlayCircle,
   Sparkles,
   Music,
+  Music2,
+  Radio,
   Play,
   Pause,
   SlidersHorizontal,
+  Fan,
 } from "lucide-react";
 import { Device } from "@/types";
 
 interface VirtualBoothSimulatorProps {
   devices: Device[];
-  onDeviceControl: (deviceId: string, state: string, value?: unknown) => Promise<void>;
+  onDeviceControl: (
+    deviceId: string,
+    state: string,
+    value?: unknown
+  ) => Promise<void>;
   onSimulateEntry: () => Promise<void>;
   onSimulateWarning: () => Promise<void>;
   onSimulateEnd: () => Promise<void>;
   lastEventMessage?: string;
-  /** 관리자 인증 여부 — false면 기기 제어·시나리오 강제 실행을 막는다 (부록G §3-4) */
+  /** 관리자 인증 여부 — false면 기기 제어·시나리오 강제 실행을 막는다 */
   isAdmin?: boolean;
 }
 
 /**
  * 부스 기기 관제 (선생님 화면 /admin)
  *
- * 부스의 도어락·전원·조명·스피커와 센서의 현재 상태를 보고, 필요하면 직접 바꾸거나
- * 자동화 시나리오(입장 감지 · 종료 10분 전 · 이용 종료)를 강제로 실행한다.
+ * 제어 장치:
+ * - door_lock_1: 솔레노이드 도어락
+ * - relay_1: 노래방 반주기 및 앰프 전원
+ * - led_1: 부스 조명 (on / off / blink / playing)
+ * - speaker_1: 안내 스피커
+ * - fan_1: 부스 선풍기 (GPIO 18, HIGH=ON)
  *
- * 이 화면에는 소리가 없다. 안내 음성과 퇴실곡은 부스에서 나야 하므로 부스 화면
- * (/booth)이 낸다. 예전에는 이 화면(선생님 노트북)에서 소리가 나고, 비밀번호
- * 키패드도 여기 있었다 — 키패드는 부스 화면으로 옮겼다.
+ * 센서:
+ * - pir_1: 입장 감지 센서
+ *
+ * 실제 GPIO 제어는 Raspberry Pi의 main.py가 담당한다.
+ * 이 화면은 백엔드에 desired_state를 전달하고
+ * Raspberry Pi가 보고한 current_state를 표시한다.
  */
 export function VirtualBoothSimulator({
   devices,
@@ -51,7 +66,10 @@ export function VirtualBoothSimulator({
   lastEventMessage,
   isAdmin = false,
 }: VirtualBoothSimulatorProps) {
-  // Device Map for Quick Lookup
+  // ---------------------------------------------------------------------------
+  // 장치 조회
+  // ---------------------------------------------------------------------------
+
   const devMap = devices.reduce<Record<string, Device>>((acc, d) => {
     acc[d.id] = d;
     return acc;
@@ -62,17 +80,30 @@ export function VirtualBoothSimulator({
   const led = devMap["led_1"] || { current_state: "off" };
   const speaker = devMap["speaker_1"] || { current_state: "idle" };
   const pir = devMap["pir_1"] || { current_state: "standby" };
+  const fan = devMap["fan_1"] || { current_state: "off" };
 
   const isDoorUnlocked =
     doorLock.current_state === "unlocked" ||
     doorLock.current_state === "open";
+
   const isPowerOn = relay.current_state === "on";
-  const isLedOn = led.current_state === "on";
-  const isLedBlink = led.current_state === "blink";
+
+  // LED 4가지 상태
+  const ledStatus = String(led.current_state ?? "off");
+
+  const isLedOn = ledStatus === "on";
+  const isLedBlink = ledStatus === "blink";
+  const isLedPlaying = ledStatus === "playing";
+  const isLedOff = ledStatus === "off";
+
   const isSpeakerPlaying = speaker.current_state === "playing";
   const isPersonDetected = pir.current_state === "detected";
+  const isFanOn = fan.current_state === "on";
 
-  // 강제 종료 중복 실행 방지
+  // ---------------------------------------------------------------------------
+  // 시나리오 중복 실행 방지
+  // ---------------------------------------------------------------------------
+
   const [isEnding, setIsEnding] = useState(false);
 
   const handleSimulateEnd = async () => {
@@ -89,17 +120,24 @@ export function VirtualBoothSimulator({
     }
   };
 
-  // 퇴실곡 미리 듣기 — 선생님이 음원 파일이 제대로 있는지 확인하는 용도다.
-  // 실제 이용 종료 때는 부스 화면이 튼다.
+  // ---------------------------------------------------------------------------
+  // 퇴실곡 미리 듣기
+  // ---------------------------------------------------------------------------
+
   const closingAudioRef = useRef<HTMLAudioElement | null>(null);
-  const [isPlayingClosingAudio, setIsPlayingClosingAudio] = useState<boolean>(false);
+
+  const [isPlayingClosingAudio, setIsPlayingClosingAudio] =
+    useState<boolean>(false);
 
   useEffect(() => {
     const audio = new Audio("/audio/closing_song.wav");
+
     audio.volume = 0.85;
+
     audio.onplay = () => setIsPlayingClosingAudio(true);
     audio.onpause = () => setIsPlayingClosingAudio(false);
     audio.onended = () => setIsPlayingClosingAudio(false);
+
     closingAudioRef.current = audio;
 
     return () => {
@@ -110,6 +148,7 @@ export function VirtualBoothSimulator({
 
   const toggleClosingSong = () => {
     const audio = closingAudioRef.current;
+
     if (!audio) return;
 
     if (isPlayingClosingAudio) {
@@ -118,39 +157,120 @@ export function VirtualBoothSimulator({
     }
 
     audio.currentTime = 0;
+
     audio.play().catch((err) =>
       console.warn("퇴실곡 미리 듣기 실패:", err)
     );
   };
 
+  // ---------------------------------------------------------------------------
+  // 선풍기 제어
+  // ---------------------------------------------------------------------------
+
+  const [isFanControlling, setIsFanControlling] = useState(false);
+
+  const handleFanToggle = async () => {
+    if (!isAdmin || isFanControlling) return;
+
+    setIsFanControlling(true);
+
+    try {
+      await onDeviceControl(
+        "fan_1",
+        isFanOn ? "off" : "on"
+      );
+    } catch (error) {
+      console.error("선풍기 제어 오류:", error);
+    } finally {
+      setIsFanControlling(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // LED 상태 제어
+  // ---------------------------------------------------------------------------
+
+  const ledModes = [
+    {
+      value: "on",
+      label: "켜짐",
+      icon: Lightbulb,
+      activeClass:
+        "bg-brass-soft/30 border-brass/50 text-brass",
+    },
+    {
+      value: "off",
+      label: "꺼짐",
+      icon: LightbulbOff,
+      activeClass:
+        "bg-raised border-line-strong text-ink",
+    },
+    {
+      value: "blink",
+      label: "깜빡임",
+      icon: Radio,
+      activeClass:
+        "bg-live-soft/30 border-live/50 text-live",
+    },
+    {
+      value: "playing",
+      label: "노래 중",
+      icon: Music2,
+      activeClass:
+        "bg-free-soft/30 border-free/50 text-free",
+    },
+  ] as const;
+
+  const handleLedControl = async (state: string) => {
+    if (!isAdmin || ledStatus === state) return;
+
+    try {
+      await onDeviceControl("led_1", state);
+    } catch (error) {
+      console.error("LED 제어 오류:", error);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // 화면
+  // ---------------------------------------------------------------------------
+
   return (
     <div className="space-y-6">
-      {/* Top Notification Banner */}
+      {/* 상단 이벤트 알림 */}
       {lastEventMessage && (
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-surface border border-line text-ink-2 text-sm">
-          <Sparkles className="w-4 h-4 text-ink-3 shrink-0" aria-hidden />
+          <Sparkles
+            className="w-4 h-4 text-ink-3 shrink-0"
+            aria-hidden
+          />
           <span>{lastEventMessage}</span>
         </div>
       )}
 
-      {/* 왼쪽: 부스 상태 그림 · 오른쪽: 시나리오 실행과 직접 제어 */}
+      {/* 왼쪽: 부스 상태 · 오른쪽: 시나리오 및 직접 제어 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Virtual Booth Physical State (7 Cols) */}
+        {/* ----------------------------------------------------------------- */}
+        {/* 왼쪽: 가상 부스 상태 */}
+        {/* ----------------------------------------------------------------- */}
+
         <div className="lg:col-span-7 bg-surface/90 border border-line rounded-2xl p-6 shadow-xl space-y-6">
           <div className="flex items-center justify-between border-b border-line pb-4">
             <div>
               <h3 className="text-lg font-bold text-ink flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-free animate-pulse"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-free animate-pulse" />
                 가상 노래방 부스 실시간 물리 상태
               </h3>
+
               <p className="text-xs text-ink-3 mt-0.5">
-                액추에이터 4종과 센서의 현재 상태입니다. Mock 모드에서는 누르는 대로 바로 바뀌고,
-                라즈베리파이를 붙이면 파이가 보고한 실제 상태가 보입니다.
+                액추에이터 5종과 센서의 현재 상태입니다.
+                Mock 모드에서는 명령에 따라 상태가 바로 바뀌고,
+                Raspberry Pi 연결 시 보고된 실제 상태가 표시됩니다.
               </p>
             </div>
           </div>
 
-          {/* Booth Visual Room Simulator */}
+          {/* 부스 시각화 */}
           <div
             className={`relative w-full h-64 rounded-xl border-2 transition-all duration-500 flex flex-col justify-between p-6 overflow-hidden ${
               isPowerOn
@@ -158,22 +278,35 @@ export function VirtualBoothSimulator({
                 : "bg-canvas/60 border-line"
             }`}
           >
-            {/* Ceiling LED Light Visual */}
+            {/* 천장 조명 */}
             <div className="flex justify-center">
               <div
                 className={`px-8 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 transition-all duration-300 ${
                   isLedBlink
-                    ? "bg-brass text-on-accent animate-bounce shadow-lg"
+                    ? "bg-live text-on-accent animate-pulse shadow-lg"
+                    : isLedPlaying
+                    ? "bg-free text-on-accent shadow-lg animate-pulse"
                     : isLedOn
                     ? "bg-brass text-on-accent shadow-md"
                     : "bg-raised text-ink-3"
                 }`}
               >
-                <Lightbulb className={`w-4 h-4 ${isLedBlink ? "animate-spin" : ""}`} />
+                {isLedBlink ? (
+                  <Radio className="w-4 h-4 animate-pulse" />
+                ) : isLedPlaying ? (
+                  <Music2 className="w-4 h-4 animate-bounce" />
+                ) : isLedOn ? (
+                  <Lightbulb className="w-4 h-4" />
+                ) : (
+                  <LightbulbOff className="w-4 h-4" />
+                )}
+
                 <span>
                   부스 조명 LED:{" "}
                   {isLedBlink
-                    ? "10분 전 깜빡임 (BLINK)"
+                    ? "깜빡임 (BLINK)"
+                    : isLedPlaying
+                    ? "노래 중 (playing)"
                     : isLedOn
                     ? "점등 (ON)"
                     : "소등 (OFF)"}
@@ -181,9 +314,9 @@ export function VirtualBoothSimulator({
               </div>
             </div>
 
-            {/* Middle Section: Screen & Person Presence */}
+            {/* 중앙 장치 */}
             <div className="flex items-center justify-between px-4">
-              {/* Karaoke Machine Screen & Amp Power */}
+              {/* 노래방 반주기 */}
               <div
                 className={`w-40 h-28 rounded-lg border flex flex-col items-center justify-center p-3 text-center transition-all duration-500 ${
                   isPowerOn
@@ -191,14 +324,25 @@ export function VirtualBoothSimulator({
                     : "bg-surface border-line text-ink-3"
                 }`}
               >
-                <Power className={`w-6 h-6 mb-1 ${isPowerOn ? "text-free animate-pulse" : "text-ink-3"}`} />
-                <span className="text-xs font-bold">노래방 반주기 & 앰프</span>
+                <Power
+                  className={`w-6 h-6 mb-1 ${
+                    isPowerOn
+                      ? "text-free animate-pulse"
+                      : "text-ink-3"
+                  }`}
+                />
+
+                <span className="text-xs font-bold">
+                  노래방 반주기 & 앰프
+                </span>
+
                 <span className="text-[10px] text-ink-3 mt-0.5">
-                  릴레이 전원: {isPowerOn ? "ON (공급 중)" : "OFF (차단됨)"}
+                  릴레이 전원:{" "}
+                  {isPowerOn ? "ON (공급 중)" : "OFF (차단됨)"}
                 </span>
               </div>
 
-              {/* Center Door Lock Visual */}
+              {/* 도어락 */}
               <div
                 className={`flex flex-col items-center justify-center w-36 h-28 rounded-lg border transition-all duration-300 ${
                   isDoorUnlocked
@@ -211,13 +355,19 @@ export function VirtualBoothSimulator({
                 ) : (
                   <Lock className="w-8 h-8 text-live mb-1" />
                 )}
-                <span className="text-xs font-bold">솔레노이드 도어락</span>
+
+                <span className="text-xs font-bold">
+                  솔레노이드 도어락
+                </span>
+
                 <span className="text-[10px] mt-0.5 font-mono">
-                  {isDoorUnlocked ? "UNLOCKED (개방)" : "LOCKED (잠김)"}
+                  {isDoorUnlocked
+                    ? "UNLOCKED (개방)"
+                    : "LOCKED (잠김)"}
                 </span>
               </div>
 
-              {/* Audio Speaker Box */}
+              {/* 스피커 */}
               <div
                 className={`w-36 h-28 rounded-lg border flex flex-col items-center justify-center p-2 text-center transition-all duration-300 ${
                   isSpeakerPlaying || isPlayingClosingAudio
@@ -230,7 +380,11 @@ export function VirtualBoothSimulator({
                 ) : (
                   <VolumeX className="w-7 h-7 text-ink-3 mb-1" />
                 )}
-                <span className="text-xs font-bold">안내 스피커</span>
+
+                <span className="text-xs font-bold">
+                  안내 스피커
+                </span>
+
                 <span className="text-[10px] text-ink-3 truncate max-w-[120px]">
                   {isPlayingClosingAudio
                     ? "퇴실곡 미리 듣는 중"
@@ -239,7 +393,12 @@ export function VirtualBoothSimulator({
                       typeof speaker.desired_value === "object" &&
                       "track" in speaker.desired_value
                       ? String(
-                          (speaker.desired_value as Record<string, unknown>).track
+                          (
+                            speaker.desired_value as Record<
+                              string,
+                              unknown
+                            >
+                          ).track
                         )
                       : "음성 안내 중"
                     : "대기 중 (IDLE)"}
@@ -247,18 +406,49 @@ export function VirtualBoothSimulator({
               </div>
             </div>
 
-            {/* Bottom: Presence Sensor & Foot Floor */}
-            <div className="flex items-center justify-between border-t border-line/80 pt-2 text-xs">
+            {/* 하단 센서 및 선풍기 상태 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line/80 pt-2 text-xs">
               <div className="flex items-center gap-2">
                 <span
                   className={`w-2 h-2 rounded-full ${
-                    isPersonDetected ? "bg-free animate-ping" : "bg-line-strong"
+                    isPersonDetected
+                      ? "bg-free animate-ping"
+                      : "bg-line-strong"
                   }`}
                 />
+
                 <span className="text-ink-3">
                   입장 감지 센서 (PIR):{" "}
-                  <strong className={isPersonDetected ? "text-free" : "text-ink-3"}>
-                    {isPersonDetected ? "사람 입장 감지됨" : "대기 중"}
+                  <strong
+                    className={
+                      isPersonDetected
+                        ? "text-free"
+                        : "text-ink-3"
+                    }
+                  >
+                    {isPersonDetected
+                      ? "사람 입장 감지됨"
+                      : "대기 중"}
+                  </strong>
+                </span>
+              </div>
+
+              {/* 선풍기 상태 표시 */}
+              <div
+                className={`flex items-center gap-1.5 ${
+                  isFanOn ? "text-free" : "text-ink-3"
+                }`}
+              >
+                <Fan
+                  className={`w-3.5 h-3.5 ${
+                    isFanOn ? "animate-spin" : ""
+                  }`}
+                />
+
+                <span>
+                  선풍기:{" "}
+                  <strong>
+                    {isFanOn ? "작동 중 (ON)" : "정지 (OFF)"}
                   </strong>
                 </span>
               </div>
@@ -275,14 +465,17 @@ export function VirtualBoothSimulator({
           </div>
         </div>
 
-        {/* 오른쪽: 시나리오 강제 실행 · 퇴실곡 미리 듣기 · 기기 직접 제어 */}
+        {/* ----------------------------------------------------------------- */}
+        {/* 오른쪽: 시나리오 및 기기 제어 */}
+        {/* ----------------------------------------------------------------- */}
+
         <div className="lg:col-span-5 bg-surface/90 border border-line rounded-2xl p-6 shadow-xl space-y-5">
           <h3 className="text-base font-bold text-ink flex items-center gap-2 border-b border-line pb-3">
             <SlidersHorizontal className="w-4 h-4 text-brass" />
             시나리오 실행 · 직접 제어
           </h3>
 
-          {/* Quick Scenario Test Buttons */}
+          {/* 자동화 시나리오 */}
           <div className="space-y-2 pt-2">
             <h4 className="text-xs font-semibold text-ink-3">
               자동화 시나리오 강제 실행 (소리는 부스 화면에서 납니다)
@@ -305,12 +498,14 @@ export function VirtualBoothSimulator({
                 className="px-3 py-2 rounded-lg bg-raised/80 hover:bg-raised/90 border border-line-strong text-xs font-medium text-live flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PlayCircle className="w-4 h-4 text-live" />
-                {isEnding ? "이용 종료 처리 중..." : "이용 종료 (퇴실곡+전원차단)"}
+                {isEnding
+                  ? "이용 종료 처리 중..."
+                  : "이용 종료 (퇴실곡+전원차단)"}
               </button>
             </div>
           </div>
 
-          {/* Closing Song Player Banner */}
+          {/* 퇴실곡 미리 듣기 */}
           <div className="p-3.5 rounded-xl bg-canvas/80 border border-brass/30 flex items-center justify-between gap-3 shadow-inner">
             <div className="flex items-center gap-3 min-w-0">
               <div
@@ -328,6 +523,7 @@ export function VirtualBoothSimulator({
                   <span className="text-xs font-bold text-ink-2 truncate">
                     더윈드(The Wind) - 다시 만나
                   </span>
+
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-brass/20 text-brass font-mono">
                     퇴실곡 (0:58~)
                   </span>
@@ -363,8 +559,12 @@ export function VirtualBoothSimulator({
             </button>
           </div>
 
-          {/* Manual Device Toggle Controls */}
+          {/* ----------------------------------------------------------------- */}
+          {/* 수동 장치 제어 */}
+          {/* ----------------------------------------------------------------- */}
+
           <div className="grid grid-cols-2 gap-3 pt-2">
+            {/* 도어락 */}
             <button
               onClick={() =>
                 onDeviceControl(
@@ -384,12 +584,17 @@ export function VirtualBoothSimulator({
               ) : (
                 <Lock className="w-4 h-4" />
               )}
+
               도어락 {isDoorUnlocked ? "수동 잠금" : "수동 해제"}
             </button>
 
+            {/* 반주기 전원 */}
             <button
               onClick={() =>
-                onDeviceControl("relay_1", isPowerOn ? "off" : "on")
+                onDeviceControl(
+                  "relay_1",
+                  isPowerOn ? "off" : "on"
+                )
               }
               disabled={!isAdmin}
               className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
@@ -399,29 +604,72 @@ export function VirtualBoothSimulator({
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Power className="w-4 h-4" />
+
               릴레이 전원 {isPowerOn ? "끄기" : "켜기"}
             </button>
 
-            <button
-              onClick={() =>
-                onDeviceControl("led_1", isLedOn ? "off" : "on")
-              }
-              disabled={!isAdmin}
-              className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-                isLedOn
-                  ? "bg-brass-soft/30 border-brass/50 text-brass"
-                  : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              <Lightbulb className="w-4 h-4" />
-              조명 {isLedOn ? "끄기" : "켜기"}
-            </button>
+            {/* LED 4가지 상태 선택 */}
+            <div className="col-span-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-ink-2">
+                  부스 조명 LED
+                </span>
 
-            {/* 누를 때마다 부스 화면(/booth)이 이 문장을 읽는다. */}
+                <span className="text-[10px] text-ink-3">
+                  현재:{" "}
+                  {isLedOn
+                    ? "켜짐"
+                    : isLedOff
+                    ? "꺼짐"
+                    : isLedBlink
+                    ? "깜빡임"
+                    : isLedPlaying
+                    ? "노래 중"
+                    : ledStatus}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                {ledModes.map(({ value, label, icon: Icon, activeClass }) => {
+                  const isActive = ledStatus === value;
+
+                  return (
+                    <button
+                      key={value}
+                      onClick={() => void handleLedControl(value)}
+                      disabled={!isAdmin}
+                      aria-pressed={isActive}
+                      className={`min-w-0 p-3 rounded-xl border text-xs font-medium flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        isActive
+                          ? activeClass
+                          : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink hover:border-line"
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                    >
+                      <Icon
+                        className={`w-4 h-4 ${
+                          isActive && value === "blink"
+                            ? "animate-pulse"
+                            : isActive && value === "playing"
+                            ? "animate-bounce"
+                            : ""
+                        }`}
+                      />
+
+                      <span className="whitespace-nowrap">
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 스피커 */}
             <button
               onClick={() =>
                 onDeviceControl("speaker_1", "playing", {
-                  message: "부스 스피커 테스트입니다. 소리가 잘 들리나요?",
+                  message:
+                    "부스 스피커 테스트입니다. 소리가 잘 들리나요?",
                 })
               }
               title="부스 화면(/booth)이 이 문장을 읽습니다 — 부스 스피커 점검용"
@@ -430,6 +678,29 @@ export function VirtualBoothSimulator({
             >
               <Volume2 className="w-4 h-4" />
               스피커 테스트
+            </button>
+
+            {/* 선풍기 */}
+            <button
+              onClick={handleFanToggle}
+              disabled={!isAdmin || isFanControlling}
+              className={`p-3 rounded-xl border text-xs font-medium flex flex-row items-center justify-center gap-2 transition-all cursor-pointer ${
+                isFanOn
+                  ? "bg-free-soft/30 border-free/50 text-free"
+                  : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              <Fan
+                className={`w-4 h-4 ${
+                  isFanOn && !isFanControlling
+                    ? "animate-spin"
+                    : ""
+                }`}
+              />
+
+              {isFanControlling
+                ? "선풍기 명령 전달 중..."
+                : `부스 선풍기 ${isFanOn ? "끄기 (ON)" : "켜기 (OFF)"}`}
             </button>
           </div>
 

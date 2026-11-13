@@ -1,3 +1,4 @@
+
 import json
 import logging
 import os
@@ -202,8 +203,13 @@ def _remove_reservation_slot_uniqueness() -> None:
 # 초기 데이터
 # ==============================================================================
 
-def _seed_initial_rows() -> None:
-    """디바이스·기본 애창곡 시드 데이터를 보장한다."""
+def _seed_device_rows() -> None:
+    """
+    기본 장치 데이터를 등록하거나 갱신한다.
+
+    기존 장치 데이터는 삭제하지 않는다.
+    fan_1은 GPIO 18번에 연결되는 선풍기 장치다.
+    """
 
     seed_devices = [
         ("door_lock_1", "솔레노이드 도어락", "door_lock"),
@@ -212,6 +218,7 @@ def _seed_initial_rows() -> None:
         ("speaker_1", "스피커/오디오 모듈", "speaker"),
         ("keypad_1", "4x4 비밀번호 키패드", "keypad"),
         ("pir_1", "입장 감지 센서", "pir"),
+        ("fan_1", "부스 선풍기", "fan"),
     ]
 
     device_query = """
@@ -225,6 +232,22 @@ def _seed_initial_rows() -> None:
         },
     )
 
+    with get_db_cursor() as cursor:
+        for dev in seed_devices:
+            cursor.execute(device_query, dev)
+
+    logger.info(
+        "기본 장치 시드 데이터 확인 완료: fan_1 포함"
+    )
+
+
+def _seed_initial_rows() -> None:
+    """디바이스·기본 애창곡 시드 데이터를 보장한다."""
+
+    # 장치 시드
+    _seed_device_rows()
+
+    # 기본 애창곡
     seed_songs = [
         ("다시 만나", "더윈드", 5),
         ("첫 만남은 계획대로 되지 않아", "TWS", 4),
@@ -242,9 +265,6 @@ def _seed_initial_rows() -> None:
     )
 
     with get_db_cursor() as cursor:
-        for dev in seed_devices:
-            cursor.execute(device_query, dev)
-
         for song in seed_songs:
             cursor.execute(song_query, song)
 
@@ -253,12 +273,41 @@ def init_db() -> None:
     """서버 시작 시 DB 테이블과 시드 데이터를 확인한다."""
 
     try:
-        # 메모리 예약 모드에서는 DB 초기화를 시도하지 않는다.
+        # ----------------------------------------------------------------------
+        # 메모리 예약 모드
+        # ----------------------------------------------------------------------
+        # 예약 데이터는 reservation_store에서 관리한다.
+        # DB가 없어도 서버가 실행될 수 있어야 한다.
+        #
+        # 단, DB 연결이 가능하다면 장치 데이터만 별도로 등록한다.
+        # 이때 예약 테이블이나 노래 테이블을 초기화하지 않는다.
+        # ----------------------------------------------------------------------
+
         if USE_MEMORY_RESERVATIONS:
             logger.info(
-                "예약 메모리 저장 모드 — DB 초기화를 건너뜁니다."
+                "예약 메모리 저장 모드 — 예약 데이터는 메모리에서 관리합니다."
             )
+
+            try:
+                _seed_device_rows()
+
+                logger.info(
+                    "메모리 예약 모드에서도 기본 장치 시드 등록 완료."
+                )
+
+            except Exception as seed_exc:
+                logger.warning(
+                    "메모리 예약 모드 — DB 장치 시드를 등록하지 못했습니다. "
+                    "DB 없이 메모리 예약 기능을 계속 사용합니다. "
+                    "원인: %s",
+                    seed_exc,
+                )
+
             return
+
+        # ----------------------------------------------------------------------
+        # Supabase PostgreSQL 모드
+        # ----------------------------------------------------------------------
 
         if IS_POSTGRES:
             logger.info(
@@ -271,6 +320,10 @@ def init_db() -> None:
 
             logger.info("Supabase seed data verified.")
             return
+
+        # ----------------------------------------------------------------------
+        # 로컬 MySQL / MariaDB 모드
+        # ----------------------------------------------------------------------
 
         with get_db_cursor(include_database=False) as cursor:
             cursor.execute(
@@ -397,6 +450,7 @@ def init_db() -> None:
         # 기존 DB에 남아 있는 날짜·시간대 영구 UNIQUE 제약조건 제거
         _remove_reservation_slot_uniqueness()
 
+        # 장치 및 기본 애창곡 시드 등록
         _seed_initial_rows()
 
         logger.info(

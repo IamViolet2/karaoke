@@ -1,82 +1,89 @@
-
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { KaraokeRoomSection } from "@/components/booth/KaraokeRoomSection";
 import { BoothAudio } from "@/components/booth/BoothAudio";
 import { useBoothData } from "@/hooks/useBoothData";
 import { useBoothSession } from "@/hooks/useBoothSession";
 
 /**
- * `/booth` — 부스 대형 화면
- *
- * 이 화면은 부스 안 모니터에 계속 띄워 두는 키오스크 화면이다.
- *   - 상단 헤더, 탭, 다른 화면으로 가는 링크를 두지 않는다.
- *   - 이용자가 실수로 다른 화면으로 빠져나가지 않도록 한다.
- *
- * 관리자가 이 화면으로 오고 싶을 때는 `/admin`의 [부스 화면] 버튼을 쓴다.
- *
- * 화면은 부스 전원(relay_1)을 따라 바뀐다.
- *   대기(전원 꺼짐) → 키패드 비밀번호 인증 · 순위
- *   준비(인증됨)    → 환영 인사 · [노래방 시작하기]
- *   노래방          → 반주·채점 · 이용 시간 안내
- *
- * 안내 음성과 퇴실곡도 이 화면이 낸다 (BoothAudio).
+ * /booth — 부스 안 노래방 전용 키오스크 화면.
+ * PIN 인증은 /door에서 처리한다. 이 화면은 일반 사용자 인증 이벤트와
+ * 실제 도어락 열림(current_state)을 모두 확인하기 전까지 완전히 검정색이다.
  */
 export default function BoothPage() {
   const {
     devices,
-    isConnected,
     topToday,
     topAll,
     anthemTop,
     announcement,
     authNotice,
-    fetchDevices,
     fetchSongs,
     fetchScores,
   } = useBoothData();
 
-  const isPowerOn =
-    devices.find((d) => d.id === "relay_1")?.current_state === "on";
+  const [normalUserAuthorized, setNormalUserAuthorized] = useState(false);
+  const [doorWasOpenedForUser, setDoorWasOpenedForUser] = useState(false);
 
+  const doorLockState = devices.find((device) => device.id === "door_lock_1")?.current_state;
+  const isDoorUnlocked = doorLockState === "unlocked";
+  const isPowerOn = devices.find((device) => device.id === "relay_1")?.current_state === "on";
+
+  // booth_auth는 PIN 자체의 검증 결과일 뿐이다.
+  // 일반 사용자 인증만 허용하고 관리자 인증은 기존 사용자 인증을 무효화한다.
+  useEffect(() => {
+    if (!authNotice) return;
+
+    if (authNotice.mode === "admin") {
+      setNormalUserAuthorized(false);
+      setDoorWasOpenedForUser(false);
+      return;
+    }
+
+    if (authNotice.success && authNotice.mode === "user") {
+      setNormalUserAuthorized(true);
+    }
+  }, [authNotice]);
+
+  // current_state가 실제 하드웨어에서 보고된 도어락 상태다.
+  // desired_state나 relay_1, booth_auth 성공만으로는 화면을 열지 않는다.
+  useEffect(() => {
+    if (normalUserAuthorized && isDoorUnlocked) {
+      setDoorWasOpenedForUser(true);
+      return;
+    }
+
+    // 일반 사용자 입장으로 문이 열린 뒤 다시 잠기면 다음 입장을 위해 인증을 초기화한다.
+    if (doorWasOpenedForUser && !isDoorUnlocked) {
+      setDoorWasOpenedForUser(false);
+      setNormalUserAuthorized(false);
+    }
+  }, [normalUserAuthorized, isDoorUnlocked, doorWasOpenedForUser]);
+
+  const canShowKaraoke =
+    normalUserAuthorized && doorWasOpenedForUser && isDoorUnlocked;
   const session = useBoothSession(isPowerOn);
 
   return (
-    <div className="theme-stage min-h-screen bg-canvas text-ink">
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 py-6">
-        <KaraokeRoomSection
-          devices={devices}
-          onSongCompleted={fetchSongs}
-          topToday={topToday}
-          topAll={topAll}
-          anthemTop={anthemTop}
-          onScoreRecorded={fetchScores}
-          session={session}
-          authNotice={authNotice}
-          onKeypadVerified={fetchDevices}
-        />
-      </main>
+    <div className="fixed inset-0 min-h-screen overflow-hidden bg-black">
+      {canShowKaraoke && (
+        <main className="min-h-screen">
+          <KaraokeRoomSection
+            externalEntryMode
+            devices={devices}
+            onSongCompleted={fetchSongs}
+            topToday={topToday}
+            topAll={topAll}
+            anthemTop={anthemTop}
+            onScoreRecorded={fetchScores}
+            session={session}
+          />
+        </main>
+      )}
 
+      {/* 안내 음성은 화면이 검정색인 동안에도 부스 스피커에서 동작한다. */}
       <BoothAudio announcement={announcement} />
-
-      {/*
-        부스 화면에는 헤더가 없어서, 백엔드와 끊긴 것을 알아챌 방법이 없다.
-        노래를 방해하지 않도록 구석에 점 하나로만 표시한다.
-      */}
-      <div
-        className="fixed bottom-3 right-3 flex items-center gap-1.5 px-2 py-1 rounded-full
-                   bg-surface/70 border border-line text-[10px] font-mono text-ink-3
-                   pointer-events-none select-none"
-        aria-live="polite"
-      >
-        <span
-          className={`w-1.5 h-1.5 rounded-full ${
-            isConnected ? "bg-free" : "bg-live"
-          }`}
-        />
-        {isConnected ? "연결됨" : "서버 끊김"}
-      </div>
     </div>
   );
 }
