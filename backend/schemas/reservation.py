@@ -1,5 +1,5 @@
 
-from typing import Optional
+from typing import Optional, Literal
 
 from pydantic import BaseModel, Field
 
@@ -144,4 +144,12 @@ class SongVideoRequest(BaseModel):
         ...,
         pattern=r"^[A-Za-z0-9_-]{11}$",
         description="유튜브 영상 ID (11자). 링크가 아니라 ID만 보낸다.",
+    )
+
+class PlaybackStateRequest(BaseModel):
+    """노래방 재생 상태 변경 요청"""
+
+    state: Literal["playing", "paused", "ended"] = Field(
+        ...,
+        description="현재 노래 재생 상태",
     )

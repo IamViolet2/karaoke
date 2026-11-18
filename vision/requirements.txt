@@ -24,5 +24,4 @@ scipy>=1.12.0
 # 백엔드 REST API 통신 및 환경변수
 requests>=2.28.0
 python-dotenv>=1.0.0
-
-
+websocket-client

@@ -2,7 +2,21 @@ from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import json
+import time
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from fastapi.responses import StreamingResponse
+
+from services.vision_stream import vision_frame_store
 
 from auth import verify_admin_token, verify_device_api_key, verify_user_auth
 from db import database as db
@@ -285,3 +299,221 @@ async def receive_vision_event(
         }
     }
 
+
+# ==============================================================================
+# [비전 영상 스트리밍] Vision -> Backend
+# ==============================================================================
+
+@device_router.websocket("/vision/stream")
+async def receive_vision_stream(
+    websocket: WebSocket,
+    _key: str = Depends(verify_device_api_key),
+):
+    """
+    Vision 클라이언트에서 원본/AI 처리 JPEG 프레임을 수신한다.
+
+    전송 프로토콜:
+      1. JSON 메타데이터 (Text)
+      2. 원본 JPEG (Bytes)
+      3. AI 처리 JPEG (Bytes)
+
+    각 프레임은 동일한 frame_id와 captured_at을 사용한다.
+    """
+
+    await websocket.accept()
+
+    logger.info("Vision 영상 스트리밍 클라이언트 연결")
+
+    last_metrics_broadcast = 0.0
+    status_broadcasted = False
+
+    try:
+        while True:
+            # 1. 프레임 메타데이터 수신
+            metadata_text = await websocket.receive_text()
+            metadata = json.loads(metadata_text)
+
+            if metadata.get("type") != "frame":
+                logger.warning("알 수 없는 Vision 영상 메시지")
+                continue
+
+            frame_id = int(metadata["frame_id"])
+            captured_at = float(metadata["captured_at"])
+            inference_ms = float(metadata.get("inference_ms", 0.0))
+
+            if frame_id < 0 or captured_at <= 0 or inference_ms < 0:
+                raise ValueError("잘못된 프레임 메타데이터")
+
+            # 2. 원본 JPEG 수신
+            raw_jpeg = await websocket.receive_bytes()
+
+            # 3. AI 처리 JPEG 수신
+            processed_jpeg = await websocket.receive_bytes()
+
+            # 비정상적으로 큰 프레임은 거부
+            max_frame_size = 8 * 1024 * 1024
+
+            if not raw_jpeg or not processed_jpeg:
+                raise ValueError("빈 영상 프레임")
+
+            if len(raw_jpeg) > max_frame_size:
+                raise ValueError("원본 영상 프레임이 너무 큽니다.")
+
+            if len(processed_jpeg) > max_frame_size:
+                raise ValueError("처리 영상 프레임이 너무 큽니다.")
+
+            received_at = time.time()
+
+            # 4. 최신 프레임 캐시에 저장
+            await vision_frame_store.publish(
+                frame_id=frame_id,
+                captured_at=captured_at,
+                inference_ms=inference_ms,
+                raw_jpeg=raw_jpeg,
+                processed_jpeg=processed_jpeg,
+                received_at=received_at,
+            )
+            
+            if not status_broadcasted:
+                await ws_manager.broadcast({
+                    "type": "vision_stream_status",
+                    "connected": True,
+                })
+                status_broadcasted = True
+
+            # 5. 프론트엔드 상태 WebSocket에 지표 전송
+            # 매 프레임마다 브로드캐스트하지 않고 최대 1초에 한 번 전송
+            monotonic_now = time.monotonic()
+
+            if monotonic_now - last_metrics_broadcast >= 1.0:
+                vision_to_backend_ms = max(
+                    0.0,
+                    (received_at - captured_at) * 1000.0,
+                )
+
+                await ws_manager.broadcast({
+                    "type": "vision_metrics",
+                    "frame_id": frame_id,
+                    "raw_frame_id": frame_id,
+                    "processed_frame_id": frame_id,
+                    "raw_captured_at": captured_at,
+                    "processed_captured_at": captured_at,
+                    "backend_received_at": received_at,
+                    "vision_to_backend_ms": round(
+                        vision_to_backend_ms, 2
+                    ),
+                    "inference_ms": round(inference_ms, 2),
+                    "raw_size": len(raw_jpeg),
+                    "processed_size": len(processed_jpeg),
+                })
+
+                last_metrics_broadcast = monotonic_now
+
+    except WebSocketDisconnect:
+        logger.info("Vision 영상 스트리밍 클라이언트 연결 종료")
+
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        logger.warning(f"Vision 영상 데이터 형식 오류: {exc}")
+
+        try:
+            await websocket.close(code=1003, reason="Invalid frame data")
+        except Exception:
+            pass
+
+    except Exception as exc:
+        logger.warning(f"Vision 영상 수신 오류: {exc}")
+
+        try:
+            await websocket.close(code=1011, reason="Vision stream error")
+        except Exception:
+            pass
+
+    finally:
+        await vision_frame_store.mark_disconnected()
+
+        await ws_manager.broadcast({
+            "type": "vision_stream_status",
+            "connected": False,
+        })
+
+
+# ==============================================================================
+# [프론트엔드 영상 출력] Backend -> Frontend
+# ==============================================================================
+
+async def generate_mjpeg(stream_type: str):
+    """
+    최신 JPEG 프레임을 multipart/x-mixed-replace 형식으로 전달한다.
+    """
+
+    last_frame_id = None
+
+    while True:
+        frame = await vision_frame_store.wait_for_frame(
+            stream_type=stream_type,
+            last_frame_id=last_frame_id,
+            timeout=10.0,
+        )
+
+        if frame is None:
+            continue
+
+        last_frame_id = frame["frame_id"]
+        jpeg = frame["jpeg"]
+
+        # MJPEG 프레임 헤더
+        headers = (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            + f"Content-Length: {len(jpeg)}\r\n".encode("ascii")
+            + f"X-Frame-ID: {frame['frame_id']}\r\n".encode("ascii")
+            + f"X-Captured-At: {frame['captured_at']}\r\n".encode("ascii")
+            + b"\r\n"
+        )
+
+        yield headers + jpeg + b"\r\n"
+
+
+@device_router.get("/vision/stream/raw")
+async def stream_raw_video(
+    _user: Dict[str, Any] = Depends(verify_user_auth),
+):
+    """프론트엔드용 원본 영상 MJPEG 스트리밍"""
+
+    return StreamingResponse(
+        generate_mjpeg("raw"),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@device_router.get("/vision/stream/processed")
+async def stream_processed_video(
+    _user: Dict[str, Any] = Depends(verify_user_auth),
+):
+    """프론트엔드용 AI 처리 영상 MJPEG 스트리밍"""
+
+    return StreamingResponse(
+        generate_mjpeg("processed"),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@device_router.get("/vision/stream/status")
+async def get_vision_stream_status(
+    _user: Dict[str, Any] = Depends(verify_user_auth),
+):
+    """현재 Vision 연결 및 프레임 수신 상태 조회"""
+
+    return {
+        "data": vision_frame_store.get_status()
+    }

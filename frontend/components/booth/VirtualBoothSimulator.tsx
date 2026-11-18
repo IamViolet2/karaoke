@@ -236,10 +236,10 @@ export function VirtualBoothSimulator({
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {/* 상단 이벤트 알림 */}
       {lastEventMessage && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-surface border border-line text-ink-2 text-sm">
+        <div className="flex items-center gap-3 px-5 py-4 rounded-xl bg-surface border border-line text-ink-2 text-base">
           <Sparkles
             className="w-4 h-4 text-ink-3 shrink-0"
             aria-hidden
@@ -249,20 +249,20 @@ export function VirtualBoothSimulator({
       )}
 
       {/* 왼쪽: 부스 상태 · 오른쪽: 시나리오 및 직접 제어 */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* ----------------------------------------------------------------- */}
         {/* 왼쪽: 가상 부스 상태 */}
         {/* ----------------------------------------------------------------- */}
 
-        <div className="lg:col-span-7 bg-surface/90 border border-line rounded-2xl p-6 shadow-xl space-y-6">
+        <div className="lg:col-span-7 bg-surface/90 border border-line rounded-2xl p-7 shadow-xl space-y-7">
           <div className="flex items-center justify-between border-b border-line pb-4">
             <div>
-              <h3 className="text-lg font-bold text-ink flex items-center gap-2">
+              <h3 className="text-xl font-bold text-ink flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-free animate-pulse" />
                 가상 노래방 부스 실시간 물리 상태
               </h3>
 
-              <p className="text-xs text-ink-3 mt-0.5">
+              <p className="text-sm text-ink-3 mt-1">
                 액추에이터 5종과 센서의 현재 상태입니다.
                 Mock 모드에서는 명령에 따라 상태가 바로 바뀌고,
                 Raspberry Pi 연결 시 보고된 실제 상태가 표시됩니다.
@@ -272,7 +272,7 @@ export function VirtualBoothSimulator({
 
           {/* 부스 시각화 */}
           <div
-            className={`relative w-full h-64 rounded-xl border-2 transition-all duration-500 flex flex-col justify-between p-6 overflow-hidden ${
+            className={`relative w-full h-72 rounded-xl border-2 transition-all duration-500 flex flex-col justify-between p-6 overflow-hidden ${
               isPowerOn
                 ? "bg-canvas border-free/50 shadow-2xl"
                 : "bg-canvas/60 border-line"
@@ -318,7 +318,7 @@ export function VirtualBoothSimulator({
             <div className="flex items-center justify-between px-4">
               {/* 노래방 반주기 */}
               <div
-                className={`w-40 h-28 rounded-lg border flex flex-col items-center justify-center p-3 text-center transition-all duration-500 ${
+                className={`w-44 h-32 rounded-lg border flex flex-col items-center justify-center p-3 text-center transition-all duration-500 ${
                   isPowerOn
                     ? "bg-raised border-brass text-ink shadow-lg"
                     : "bg-surface border-line text-ink-3"
@@ -336,7 +336,7 @@ export function VirtualBoothSimulator({
                   노래방 반주기 & 앰프
                 </span>
 
-                <span className="text-[10px] text-ink-3 mt-0.5">
+                <span className="text-xs text-ink-3 mt-0.5">
                   릴레이 전원:{" "}
                   {isPowerOn ? "ON (공급 중)" : "OFF (차단됨)"}
                 </span>
@@ -344,7 +344,7 @@ export function VirtualBoothSimulator({
 
               {/* 도어락 */}
               <div
-                className={`flex flex-col items-center justify-center w-36 h-28 rounded-lg border transition-all duration-300 ${
+                className={`flex flex-col items-center justify-center w-40 h-32 rounded-lg border transition-all duration-300 ${
                   isDoorUnlocked
                     ? "bg-free-soft/40 border-free/60 text-free"
                     : "bg-live-soft/40 border-live/60 text-live"
@@ -360,7 +360,7 @@ export function VirtualBoothSimulator({
                   솔레노이드 도어락
                 </span>
 
-                <span className="text-[10px] mt-0.5 font-mono">
+                <span className="text-xs mt-0.5 font-mono">
                   {isDoorUnlocked
                     ? "UNLOCKED (개방)"
                     : "LOCKED (잠김)"}
@@ -369,7 +369,7 @@ export function VirtualBoothSimulator({
 
               {/* 스피커 */}
               <div
-                className={`w-36 h-28 rounded-lg border flex flex-col items-center justify-center p-2 text-center transition-all duration-300 ${
+                className={`w-40 h-32 rounded-lg border flex flex-col items-center justify-center p-2 text-center transition-all duration-300 ${
                   isSpeakerPlaying || isPlayingClosingAudio
                     ? "bg-brass-soft/40 border-brass/60 text-brass animate-pulse"
                     : "bg-surface border-line text-ink-3"
@@ -385,7 +385,7 @@ export function VirtualBoothSimulator({
                   안내 스피커
                 </span>
 
-                <span className="text-[10px] text-ink-3 truncate max-w-[120px]">
+                <span className="text-xs text-ink-3 truncate max-w-[120px]">
                   {isPlayingClosingAudio
                     ? "퇴실곡 미리 듣는 중"
                     : isSpeakerPlaying
@@ -469,8 +469,8 @@ export function VirtualBoothSimulator({
         {/* 오른쪽: 시나리오 및 기기 제어 */}
         {/* ----------------------------------------------------------------- */}
 
-        <div className="lg:col-span-5 bg-surface/90 border border-line rounded-2xl p-6 shadow-xl space-y-5">
-          <h3 className="text-base font-bold text-ink flex items-center gap-2 border-b border-line pb-3">
+        <div className="lg:col-span-5 bg-surface/90 border border-line rounded-2xl p-7 shadow-xl space-y-6">
+          <h3 className="text-lg font-bold text-ink flex items-center gap-2 border-b border-line pb-4">
             <SlidersHorizontal className="w-4 h-4 text-brass" />
             시나리오 실행 · 직접 제어
           </h3>
@@ -573,7 +573,7 @@ export function VirtualBoothSimulator({
                 )
               }
               disabled={!isAdmin}
-              className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+              className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 isDoorUnlocked
                   ? "bg-free-soft/30 border-free/50 text-free"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
@@ -597,7 +597,7 @@ export function VirtualBoothSimulator({
                 )
               }
               disabled={!isAdmin}
-              className={`p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+              className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 isPowerOn
                   ? "bg-brass-soft/30 border-brass/50 text-brass"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"
@@ -611,11 +611,11 @@ export function VirtualBoothSimulator({
             {/* LED 4가지 상태 선택 */}
             <div className="col-span-2 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-ink-2">
+                <span className="text-sm font-semibold text-ink-2">
                   부스 조명 LED
                 </span>
 
-                <span className="text-[10px] text-ink-3">
+                <span className="text-sm text-ink-3">
                   현재:{" "}
                   {isLedOn
                     ? "켜짐"
@@ -639,7 +639,7 @@ export function VirtualBoothSimulator({
                       onClick={() => void handleLedControl(value)}
                       disabled={!isAdmin}
                       aria-pressed={isActive}
-                      className={`min-w-0 p-3 rounded-xl border text-xs font-medium flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      className={`min-w-0 p-3 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
                         isActive
                           ? activeClass
                           : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink hover:border-line"
@@ -674,7 +674,7 @@ export function VirtualBoothSimulator({
               }
               title="부스 화면(/booth)이 이 문장을 읽습니다 — 부스 스피커 점검용"
               disabled={!isAdmin}
-              className="p-3 rounded-xl border text-xs font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-raised/50 border-line-strong text-ink-3 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-3 rounded-xl border text-sm font-medium flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-raised/50 border-line-strong text-ink-3 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Volume2 className="w-4 h-4" />
               스피커 테스트
@@ -684,7 +684,7 @@ export function VirtualBoothSimulator({
             <button
               onClick={handleFanToggle}
               disabled={!isAdmin || isFanControlling}
-              className={`p-3 rounded-xl border text-xs font-medium flex flex-row items-center justify-center gap-2 transition-all cursor-pointer ${
+              className={`p-3 rounded-xl border text-sm font-medium flex flex-row items-center justify-center gap-2 transition-all cursor-pointer ${
                 isFanOn
                   ? "bg-free-soft/30 border-free/50 text-free"
                   : "bg-raised/50 border-line-strong text-ink-3 hover:text-ink"

@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, {
@@ -16,11 +15,9 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { AdminGate } from "@/components/booth/AdminGate";
 import { VirtualBoothSimulator } from "@/components/booth/VirtualBoothSimulator";
 import { ReservationSection } from "@/components/booth/ReservationSection";
-import { SongHistorySection } from "@/components/booth/SongHistorySection";
 import { VideoCheckPanel } from "@/components/booth/VideoCheckPanel";
 import { OpsSummary } from "@/components/admin/OpsSummary";
 import { SchedulerPanel } from "@/components/admin/SchedulerPanel";
-import { AnthemRankingPanel } from "@/components/admin/AnthemRankingPanel";
 import { useBoothData } from "@/hooks/useBoothData";
 import { apiUrl } from "@/utils/apiConfig";
 import {
@@ -38,8 +35,6 @@ export default function AdminPage() {
   const {
     devices,
     reservations,
-    allSongs,
-    favoriteSongs,
     lastEventMsg,
     isConnected,
     fetchDevices,
@@ -377,7 +372,7 @@ export default function AdminPage() {
   );
 
   return (
-    <div className="theme-day min-h-screen bg-canvas text-ink">
+    <div className="theme-day min-h-screen bg-canvas text-ink text-[17px]">
       <AppHeader
         title="관리자 운영 화면"
         subtitle="기기 제어 · 시나리오 실행 · 예약 관리 (선생님 전용)"
@@ -387,17 +382,17 @@ export default function AdminPage() {
           <div className="flex items-center gap-2">
             <Link
               href="/booth"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-xs font-bold text-ink-2 transition-colors"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-sm font-bold text-ink-2 transition-colors"
             >
-              <Monitor className="w-3.5 h-3.5" />
+              <Monitor className="w-4 h-4" />
               부스 화면
             </Link>
 
             <Link
               href="/"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-xs font-bold text-ink-2 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-sm font-bold text-ink-2 transition-colors"
             >
-              <Home className="w-3.5 h-3.5" />
+              <Home className="w-4 h-4" />
               예약 화면
             </Link>
 
@@ -407,10 +402,10 @@ export default function AdminPage() {
                 onClick={handleExtendSession}
                 disabled={isExtending}
                 title="관리자 세션을 1시간 연장합니다."
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-xs font-bold text-ink-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raised hover:bg-line-strong/90 border border-line-strong text-sm font-bold text-ink-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RefreshCw
-                  className={`w-3.5 h-3.5 ${
+                  className={`w-4 h-4 ${
                     isExtending ? "animate-spin" : ""
                   }`}
                 />
@@ -423,7 +418,7 @@ export default function AdminPage() {
         }
       />
 
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
+      <main className="max-w-7xl mx-auto px-5 lg:px-8 py-8 space-y-8">
         <AdminGate isAuthed={adminAuthed} />
 
         {adminAuthed && (
@@ -437,8 +432,6 @@ export default function AdminPage() {
             <CctvPanel />
 
             <SchedulerPanel />
-
-            <AnthemRankingPanel />
 
             <VirtualBoothSimulator
               devices={devices}
@@ -464,11 +457,6 @@ export default function AdminPage() {
             />
 
             <VideoCheckPanel />
-
-            <SongHistorySection
-              allSongs={allSongs}
-              favoriteSongs={favoriteSongs}
-            />
           </>
         )}
       </main>

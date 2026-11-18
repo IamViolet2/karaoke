@@ -93,39 +93,16 @@ CREATE TABLE IF NOT EXISTS song_history (
 --    "관리자가 직접 지정한 영상"만 담는다. 부스 화면·관람객 폰·관리자 노트북이
 --    같은 영상을 보게 하려고 브라우저가 아닌 서버에 저장한다.
 CREATE TABLE IF NOT EXISTS song_videos (
-  song_id    VARCHAR(64) PRIMARY KEY,
-  video_id   VARCHAR(32) NOT NULL,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+  song_id        VARCHAR(64) PRIMARY KEY,
+  video_id       VARCHAR(32) NOT NULL,
 
--- ==============================================================================
--- 전시 체험 대기열 (부록G §2-③ 전시 체험 모드)
---
--- 전시장 관람객에게는 예약 PIN이 없다. QR을 찍어 그 자리에서 체험권을 받고,
--- 대기 번호를 받아 기다리다가, 차례가 오면 그 체험권의 PIN으로 부스에 들어간다.
---
--- reservations 와 합치지 않은 이유:
---   예약은 '날짜 + 타임슬롯' 단위라 하루 두 건뿐이고 미리 신청한다.
---   체험권은 '줄 선 순서' 단위라 하루에 수십 건이 즉석에서 생긴다.
---   같은 표에 넣으면 중복 예약 차단(uq_date_slot)에 바로 걸린다.
---
--- status 흐름: waiting → called → active → done
---                             ↘ expired (호출했는데 오지 않음)
--- ==============================================================================
-CREATE TABLE IF NOT EXISTS queue_tickets (
-  id         INT AUTO_INCREMENT PRIMARY KEY,
-  ticket_no  INT NOT NULL,                  -- 그날의 대기 번호 (1부터)
-  issued_on  DATE NOT NULL,                 -- 발급일 (번호는 날마다 1로 돌아간다)
-  nickname   VARCHAR(20) NOT NULL DEFAULT '관람객',
-  pin_code   VARCHAR(4) NOT NULL,           -- 이 체험권 전용 4자리
-  status     VARCHAR(20) NOT NULL DEFAULT 'waiting',
-  issued_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-  called_at  DATETIME NULL,
-  started_at DATETIME NULL,
-  ended_at   DATETIME NULL,
-  UNIQUE KEY uq_ticket_day (issued_on, ticket_no),
-  INDEX idx_queue_status (issued_on, status)
+  -- 현재 재생 상태
+  playback_state ENUM('PLAYING', 'STOPPED', 'WAITING') NOT NULL DEFAULT 'WAITING',
+  `current_time` FLOAT NOT NULL DEFAULT 0,
+  duration       FLOAT NOT NULL DEFAULT 0,
+
+  updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ==============================================================================

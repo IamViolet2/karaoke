@@ -127,6 +127,11 @@ interface KaraokeRoomSectionProps {
   /** /door에서 인증과 실제 도어락 열림이 확인된 뒤 /booth에서만 true */
   externalEntryMode?: boolean;
   devices?: Device[];
+  onDeviceControl?: (
+    deviceId: string,
+    state: string,
+    value?: unknown
+  ) => Promise<void>;
   onSongCompleted?: () => void;
   topToday?: ScoreRecord[];
   topAll?: ScoreRecord[];
@@ -187,6 +192,7 @@ export function KaraokeRoomSection({
     resolved?.songId === selectedSong.id ? resolved.media : null;
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -237,6 +243,31 @@ export function KaraokeRoomSection({
   const finishAndScoreRef = useRef<(() => void) | null>(null);
   const selectedSongRef = useRef(selectedSong);
   const attemptIndexRef = useRef(attemptIndex);
+
+  // ─────────────────────────────────────────────────────────
+  // 브라우저 전체화면(F11) 감지
+  // ─────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const updateFullscreenState = () => {
+      // F11은 Fullscreen API 이벤트를 발생시키지 않는 브라우저가 있어
+      // 브라우저 창 높이와 화면 높이도 함께 비교한다.
+      const apiFullscreen = Boolean(document.fullscreenElement);
+      const browserFullscreen =
+        window.innerHeight >= window.screen.height - 80;
+
+      setIsFullscreen(apiFullscreen || browserFullscreen);
+    };
+
+    updateFullscreenState();
+    window.addEventListener("resize", updateFullscreenState);
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+
+    return () => {
+      window.removeEventListener("resize", updateFullscreenState);
+      document.removeEventListener("fullscreenchange", updateFullscreenState);
+    };
+  }, []);
 
   // ─────────────────────────────────────────────────────────
   // 엔진 초기화 / 정리
@@ -330,25 +361,56 @@ export function KaraokeRoomSection({
   }, [selectedSong, attemptIndex]);
 
   // ─────────────────────────────────────────────────────────
+  // 노래 재생 상태 서버 전달
+  // ─────────────────────────────────────────────────────────
+
+  const reportPlaybackState = useCallback(
+    async (state: "playing" | "paused" | "ended") => {
+      try {
+        const res = await fetch(
+          apiUrl("/api/booth/playback-state"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ state }),
+          }
+        );
+
+        if (!res.ok) {
+          console.warn(
+            `[노래방] 재생 상태 전달 실패: ${state} (${res.status})`
+          );
+        }
+      } catch (error) {
+        console.warn("[노래방] 재생 상태 API 호출 실패", error);
+      }
+    },
+    []
+  );
+
+  // ─────────────────────────────────────────────────────────
   // 모든 재생 중지
   // ─────────────────────────────────────────────────────────
 
   const stopAllPlayback = useCallback(() => {
     accompanimentRef.current?.stop();
-
+  
     if (localAudioRef.current) {
       localAudioRef.current.pause();
     }
-
+  
     ytHandleRef.current?.pause();
-
+  
     if (tickTimerRef.current) {
       clearInterval(tickTimerRef.current);
       tickTimerRef.current = null;
     }
-
+  
     setIsPlaying(false);
-  }, []);
+    void reportPlaybackState("paused");
+  }, [reportPlaybackState]);
 
   // ─────────────────────────────────────────────────────────
   // DB 기록
@@ -596,6 +658,7 @@ export function KaraokeRoomSection({
 
         if (state === YT_STATE.PLAYING) {
           setIsPlaying(true);
+          void reportPlaybackState("playing");
           setDuration(ytHandleRef.current?.getDuration() ?? 0);
 
           setYoutubeTestStatus((prev) => ({
@@ -606,7 +669,9 @@ export function KaraokeRoomSection({
           setPlayerError(null);
         } else if (state === YT_STATE.PAUSED) {
           setIsPlaying(false);
+          void reportPlaybackState("paused");
         } else if (state === YT_STATE.ENDED) {
+          void reportPlaybackState("ended");
           finishAndScoreRef.current?.();
         }
       },
@@ -709,7 +774,7 @@ export function KaraokeRoomSection({
 
       host.innerHTML = "";
     };
-  }, [media?.source, media?.youtubeId, hasEntered]);
+  }, [media?.source, media?.youtubeId, hasEntered, reportPlaybackState]);
 
   // ─────────────────────────────────────────────────────────
   // 가상 마이크
@@ -961,7 +1026,10 @@ export function KaraokeRoomSection({
       audio.onloadedmetadata = () =>
         setDuration(Math.floor(audio.duration || 0));
 
-      audio.onended = () => finishAndScore();
+      audio.onended = () => {
+        void reportPlaybackState("ended");
+        finishAndScore();
+      }
 
       audio.onerror = () => {
         setIsPlaying(false);
@@ -989,6 +1057,7 @@ export function KaraokeRoomSection({
 
       try {
         await audio.play();
+        void reportPlaybackState("playing");
         setPlayerError(null);
       } catch {
         setPlayerError(
@@ -1007,7 +1076,8 @@ export function KaraokeRoomSection({
         progression: selectedSong.mr.progression,
         tonic: selectedSong.mr.tonic,
       });
-
+      
+      void reportPlaybackState("playing");
       setDuration(selectedSong.approxDurationSec);
     }
 
@@ -1131,9 +1201,6 @@ export function KaraokeRoomSection({
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
-  const progressPct =
-    duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
-
   const waitingForPlayer = media?.source === "youtube" && !playerReady;
 
   const sourceBadge = {
@@ -1188,7 +1255,7 @@ export function KaraokeRoomSection({
       {/* 2. 프리미엄 노래방 메인 화면 */}
 
       {hasEntered && (
-        <div className="relative min-h-screen overflow-hidden bg-[#070812] text-white">
+        <div className={`relative min-h-screen overflow-hidden bg-[#070812] text-white ${isFullscreen ? "min-h-0" : ""}`}>
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
             <div className="absolute -top-64 left-[12%] h-[650px] w-[650px] rounded-full bg-indigo-500/20 blur-[145px]" />
             <div className="absolute -top-48 right-[-8%] h-[650px] w-[650px] rounded-full bg-fuchsia-500/15 blur-[155px]" />
@@ -1197,9 +1264,9 @@ export function KaraokeRoomSection({
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.055),transparent_48%)]" />
           </div>
 
-          <div className="relative z-10 mx-auto max-w-[1700px] px-3 py-5 sm:px-5 lg:px-8 lg:py-7">
+          <div className={`relative z-10 mx-auto max-w-[1700px] px-3 sm:px-5 lg:px-8 ${isFullscreen ? "py-2 lg:py-3" : "py-5 lg:py-7"}`}>
             {/* 상단 브랜드 라인 */}
-            <div className="mb-5 flex items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div className={`${isFullscreen ? "mb-2 pb-2" : "mb-5 pb-4"} flex items-center justify-between gap-3 border-b border-white/10`}>
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-300/30 bg-gradient-to-br from-indigo-400/30 via-violet-500/20 to-fuchsia-400/20 shadow-[0_0_28px_rgba(139,92,246,0.2)]">
                   <Music className="h-5 w-5 text-violet-100" />
@@ -1215,16 +1282,6 @@ export function KaraokeRoomSection({
                 </div>
               </div>
 
-              <div className="hidden items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/[0.08] px-3 py-2 sm:flex">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.9)]" />
-                <span className="text-[10px] font-semibold tracking-wide text-emerald-200">
-                  ROOM ACTIVE
-                </span>
-              </div>
-            </div>
-
-            {/* 세션 정보 */}
-            <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.045] shadow-[0_12px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
               <SessionStrip
                 session={session}
                 isPowerOn={isPowerOn}
@@ -1232,89 +1289,10 @@ export function KaraokeRoomSection({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+            <div className={`grid grid-cols-1 ${isFullscreen ? "gap-3 xl:grid-cols-12" : "gap-6 xl:grid-cols-12"}`}>
               {/* 왼쪽: 메인 영상 및 컨트롤 */}
 
-              <div className="flex min-w-0 flex-col space-y-5 xl:col-span-8">
-                {/* 곡 정보 헤더 */}
-                <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.035] to-indigo-500/[0.07] p-5 shadow-[0_15px_55px_rgba(0,0,0,0.2)] backdrop-blur-xl sm:p-6">
-                  <div className="pointer-events-none absolute -right-20 -top-28 h-64 w-64 rounded-full bg-violet-400/15 blur-[75px]" />
-                  <div className="pointer-events-none absolute -bottom-32 left-1/3 h-56 w-56 rounded-full bg-blue-400/10 blur-[80px]" />
-
-                  <div className="relative flex flex-wrap items-end justify-between gap-5">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-fuchsia-300 shadow-[0_0_14px_rgba(232,121,249,0.95)]" />
-                        <span className="text-[10px] font-bold tracking-[0.3em] text-fuchsia-200">
-                          NOW SELECTED
-                        </span>
-                      </div>
-
-                      <h2 className="break-words text-3xl font-black leading-tight tracking-tight text-white drop-shadow-[0_3px_18px_rgba(139,92,246,0.25)] sm:text-4xl lg:text-5xl">
-                        {selectedSong.title}
-                      </h2>
-
-                      <p className="mt-2 text-sm font-medium text-slate-300 sm:text-base">
-                        {selectedSong.singer}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-white/15 bg-black/20 px-3 py-2 text-[10px] font-semibold text-slate-200 backdrop-blur-md">
-                        {selectedSong.tag}
-                      </span>
-
-                      <div
-                        className={`flex items-center gap-2 rounded-full border px-3 py-2 text-[10px] font-semibold backdrop-blur-md ${sourceBadge.className}`}
-                      >
-                        <SourceIcon className="h-3.5 w-3.5" />
-                        {sourceBadge.label}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 유튜브 테스트 상태 */}
-                {!isSchoolAnthem(selectedSong) && (
-                  <div className="flex min-h-5 items-center gap-2 px-1 text-xs">
-                    {getYoutubeStatus(selectedSong) === "success" && (
-                      <>
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                        <span className="text-emerald-300">
-                          유튜브 영상 송출 확인
-                        </span>
-                      </>
-                    )}
-
-                    {getYoutubeStatus(selectedSong) === "testing" && (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin text-violet-300" />
-                        <span className="text-violet-200">
-                          유튜브 영상 테스트 중
-                        </span>
-                      </>
-                    )}
-
-                    {getYoutubeStatus(selectedSong) === "failed" && (
-                      <>
-                        <AlertTriangle className="h-4 w-4 text-rose-400" />
-                        <span className="text-rose-300">
-                          유튜브 후보 실패 — 내장 반주 사용
-                        </span>
-                      </>
-                    )}
-
-                    {getYoutubeStatus(selectedSong) === "untested" && (
-                      <>
-                        <AlertTriangle className="h-4 w-4 text-slate-500" />
-                        <span className="text-slate-400">
-                          유튜브 영상 미검증 — 반주 시작을 눌러 테스트
-                        </span>
-                      </>
-                    )}
-                  </div>
-                )}
-
+              <div className={`flex min-w-0 flex-col ${isFullscreen ? "space-y-3 xl:col-span-9" : "space-y-5 xl:col-span-8"}`}>
                 {playerError && (
                   <div className="rounded-xl border border-rose-400/25 bg-rose-500/10 p-3 text-xs text-rose-200 shadow-[0_0_25px_rgba(244,63,94,0.06)]">
                     {playerError}
@@ -1325,7 +1303,18 @@ export function KaraokeRoomSection({
                 <div className="group relative rounded-[1.35rem] bg-gradient-to-br from-indigo-300/50 via-violet-400/30 to-fuchsia-300/40 p-[1px] shadow-[0_25px_90px_rgba(0,0,0,0.55),0_0_45px_rgba(139,92,246,0.16)]">
                   <div className="pointer-events-none absolute -inset-3 -z-10 rounded-[1.6rem] bg-gradient-to-br from-indigo-500/20 via-violet-500/15 to-fuchsia-500/20 blur-2xl opacity-80 transition-opacity duration-700 group-hover:opacity-100" />
 
-                  <div className="relative aspect-video w-full overflow-hidden rounded-[1.3rem] bg-[#03040A]">
+                  <div
+                    className={`relative w-full overflow-hidden rounded-[1.3rem] bg-[#03040A] ${isFullscreen ? "" : "aspect-video"}`}
+                    style={
+                      isFullscreen
+                        ? {
+                            height: "min(56.25vw, calc(100vh - 285px))",
+                            minHeight: "240px",
+                            aspectRatio: "16 / 9",
+                          }
+                        : undefined
+                    }
+                  >
                     <div className="pointer-events-none absolute inset-0 z-10 rounded-[1.3rem] ring-1 ring-inset ring-white/10" />
 
                     {media?.source === "youtube" ? (
@@ -1360,11 +1349,14 @@ export function KaraokeRoomSection({
                           }}
                           onPlay={() => {
                             setIsPlaying(true);
+                            void reportPlaybackState("playing");
                           }}
                           onPause={() => {
                             setIsPlaying(false);
+                            void reportPlaybackState("paused");
                           }}
                           onEnded={() => {
+                            void reportPlaybackState("ended");
                             finishAndScore();
                           }}
                           onError={() => {
@@ -1391,31 +1383,55 @@ export function KaraokeRoomSection({
                   </div>
                 </div>
 
-                {/* 진행 바 */}
-                <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 shadow-lg backdrop-blur-xl">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[9px] font-bold tracking-[0.2em] text-violet-200/80">
-                      PLAYBACK PROGRESS
-                    </span>
-                    <span className="font-mono text-[10px] text-slate-400">
-                      {Math.round(progressPct)}%
-                    </span>
-                  </div>
+                {/* 곡 정보: 영상 아래 한 줄로 간결하게 표시 */}
+                <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.035] to-indigo-500/[0.07] px-4 py-3 shadow-[0_15px_55px_rgba(0,0,0,0.2)] backdrop-blur-xl sm:px-5">
+                  <div className="pointer-events-none absolute -right-20 -top-28 h-48 w-48 rounded-full bg-violet-400/10 blur-[75px]" />
+                  <div className="relative flex min-w-0 flex-col gap-1.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fuchsia-300 shadow-[0_0_14px_rgba(232,121,249,0.95)]" />
+                      <h2 className="min-w-0 truncate text-base font-bold tracking-tight text-white sm:text-lg">
+                        {selectedSong.singer} - {selectedSong.title}
+                      </h2>
+                      <span className="ml-auto shrink-0 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[9px] font-semibold text-slate-300">
+                        {selectedSong.tag}
+                      </span>
+                    </div>
 
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-blue-400 via-violet-400 to-fuchsia-400 shadow-[0_0_18px_rgba(192,132,252,0.65)] transition-all duration-500"
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-
-                  <div className="mt-2 flex justify-between font-mono text-[10px] text-slate-500">
-                    <span>{formatSeconds(elapsed)}</span>
-                    <span>
-                      {duration > 0
-                        ? formatSeconds(duration)
-                        : "--:--"}
-                    </span>
+                    <div className="flex min-h-4 flex-wrap items-center gap-x-3 gap-y-1 pl-3.5 text-[10px]">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${sourceBadge.className}`}>
+                        <SourceIcon className="h-3 w-3" />
+                        {sourceBadge.label}
+                      </span>
+                      {!isSchoolAnthem(selectedSong) && (
+                        <>
+                          <span className="text-white/20">•</span>
+                          {getYoutubeStatus(selectedSong) === "success" && (
+                            <span className="inline-flex items-center gap-1 text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" />
+                              유튜브 송출 확인
+                            </span>
+                          )}
+                          {getYoutubeStatus(selectedSong) === "testing" && (
+                            <span className="inline-flex items-center gap-1 text-violet-200">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              영상 테스트 중
+                            </span>
+                          )}
+                          {getYoutubeStatus(selectedSong) === "failed" && (
+                            <span className="inline-flex items-center gap-1 text-rose-300">
+                              <AlertTriangle className="h-3 w-3" />
+                              영상 후보 실패 · 내장 반주 사용
+                            </span>
+                          )}
+                          {getYoutubeStatus(selectedSong) === "untested" && (
+                            <span className="inline-flex items-center gap-1 text-slate-400">
+                              <AlertTriangle className="h-3 w-3" />
+                              영상 미검증 · 재생 시 테스트
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1519,7 +1535,7 @@ export function KaraokeRoomSection({
 
               {/* 오른쪽: 선곡 라이브러리 */}
 
-              <aside className="relative flex min-h-[560px] flex-col overflow-hidden rounded-[1.4rem] border border-violet-200/15 bg-gradient-to-b from-[#1b1b30]/95 via-[#111321]/95 to-[#0c0d18]/95 shadow-[0_25px_75px_rgba(0,0,0,0.42),0_0_40px_rgba(99,102,241,0.08)] backdrop-blur-2xl xl:col-span-4">
+              <aside className={`relative flex min-h-[560px] flex-col overflow-hidden rounded-[1.4rem] border border-violet-200/15 bg-gradient-to-b from-[#1b1b30]/95 via-[#111321]/95 to-[#0c0d18]/95 shadow-[0_25px_75px_rgba(0,0,0,0.42),0_0_40px_rgba(99,102,241,0.08)] backdrop-blur-2xl ${isFullscreen ? "xl:col-span-3" : "xl:col-span-4"}`}>
                 <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-fuchsia-500/12 blur-[80px]" />
                 <div className="pointer-events-none absolute -bottom-28 -left-24 h-64 w-64 rounded-full bg-indigo-500/12 blur-[80px]" />
 

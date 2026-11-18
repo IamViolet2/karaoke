@@ -79,6 +79,11 @@ class BoothService:
                 },
                 operator="admin",
             )
+            await provider.set_actuator_state(
+                "fan_1",
+                "on",
+                operator="admin",
+            )
 
             event_msg = {
                 "type": "booth_auth",
@@ -222,6 +227,12 @@ class BoothService:
                 "track": "welcome",
                 "message": _welcome_speech(user_name),
             },
+            operator="user",
+        )
+        
+        await provider.set_actuator_state(
+            "fan_1",
+            "on",
             operator="user",
         )
 
@@ -386,6 +397,11 @@ class BoothService:
                 "state": "off",
                 "value": None,
             },
+            {
+                "device_id": "fan_1",
+                "state": "off",
+                "value": None,
+            }
         ]
 
         results: Dict[str, Dict[str, Any]] = {}
@@ -472,4 +488,66 @@ class BoothService:
             "message": message,
             "device_results": results,
             "failed_devices": failed_devices,
+        }
+
+    @staticmethod
+    async def update_playback_led(state: str):
+        """
+        노래 재생 상태에 따라 LED의 desired_state를 변경한다.
+
+        playing -> playing
+        paused  -> on
+        ended   -> on
+
+        단, 경고 blink 상태는 유지한다.
+        """
+
+        provider = get_device_provider()
+
+        # 노래방 사용 중인지 확인
+        relay = await provider.get_device_status("relay_1")
+
+        if not relay or relay.get("current_state") != "on":
+            return {
+                "updated": False,
+                "reason": "booth_not_in_use",
+            }
+
+        # LED 상태 확인
+        led = await provider.get_device_status("led_1")
+
+        if not led:
+            return {
+                "updated": False,
+                "reason": "led_not_found",
+            }
+
+        # 경고 상태는 재생 이벤트로 덮어쓰지 않는다.
+        if (
+            led.get("desired_state") == "blink"
+            or led.get("current_state") == "blink"
+        ):
+            return {
+                "updated": False,
+                "state": "blink",
+                "reason": "warning_active",
+            }
+
+        # 재생 상태에 따른 LED 목표 상태
+        target_state = "playing" if state == "playing" else "on"
+
+        updated = await provider.set_actuator_state(
+            device_id="led_1",
+            desired_state=target_state,
+            value={
+                "mode": "playing" if target_state == "playing" else "normal",
+                "brightness_pct": 100,
+            },
+            operator="system",
+        )
+
+        return {
+            "updated": True,
+            "state": target_state,
+            "desired_state": updated.get("desired_state"),
         }

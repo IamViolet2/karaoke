@@ -34,6 +34,21 @@ export type MediaLicense =
   | "cc-or-public-domain"
   | "synth-fallback";
 
+/** 교가 영상의 진행 안내 큐 */
+export type GuideCue = {
+  t: number;
+  kind:
+    | "intro"
+    | "verse"
+    | "pre"
+    | "chorus"
+    | "bridge"
+    | "high"
+    | "outro";
+  label: string;
+  hint: string;
+};
+
 export interface KaraokeSong {
   id: string;
   title: string;

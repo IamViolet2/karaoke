@@ -2,15 +2,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2, Delete, RotateCcw } from "lucide-react";
 import { apiUrl } from "@/utils/apiConfig";
 import type { BoothAuthNotice } from "@/hooks/useBoothData";
 
 const KEY_ROWS = [
-  ["1", "2", "3", "A"],
-  ["4", "5", "6", "B"],
-  ["7", "8", "9", "C"],
-  ["*", "0", "#", "D"],
+  ["1", "2", "3"],
+  ["4", "5", "6"],
+  ["7", "8", "9"],
+  ["BACKSPACE", "0", "CLEAR"],
 ];
 
 const BUFFER_TIMEOUT_MS = 8_000;
@@ -145,13 +145,45 @@ export function BoothKeypad({
     setDigits("");
   }, []);
 
+  const deleteLastDigit = useCallback(() => {
+    if (busyRef.current) return;
+
+    beep(440, 70);
+
+    const next = digitsRef.current.slice(0, -1);
+    digitsRef.current = next;
+    setDigits(next);
+
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+
+    setTone("idle");
+    setMessage(null);
+  }, []);
+
+  const clearAllDigits = useCallback(() => {
+    if (busyRef.current) return;
+
+    beep(440, 90);
+    clearDigits();
+
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+
+    setTone("idle");
+    setMessage(null);
+  }, [clearDigits]);
+
   const submit = useCallback(
     async (pin: string) => {
       if (busyRef.current) return;
 
       busyRef.current = true;
 
-      // 요청마다 식별 번호를 부여한다.
       const requestId = ++requestSeqRef.current;
       const controller = new AbortController();
 
@@ -188,7 +220,6 @@ export function BoothKeypad({
           signal: controller.signal,
         });
 
-        // 이미 만료되었거나 더 최신 요청이 시작됐다면 응답을 무시한다.
         if (requestId !== requestSeqRef.current || controller.signal.aborted) {
           return;
         }
@@ -227,7 +258,6 @@ export function BoothKeypad({
           console.error("인증 성공 콜백 오류:", callbackError);
         }
       } catch (error) {
-        // 이전 요청의 오류가 현재 화면에 표시되지 않도록 한다.
         if (requestId !== requestSeqRef.current) return;
 
         beep(220, 300);
@@ -277,17 +307,13 @@ export function BoothKeypad({
     (key: string) => {
       if (busyRef.current) return;
 
-      if (key === "*") {
-        beep(440, 90);
-        clearDigits();
+      if (key === "BACKSPACE") {
+        deleteLastDigit();
+        return;
+      }
 
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current);
-          holdTimerRef.current = null;
-        }
-
-        setTone("idle");
-        setMessage(null);
+      if (key === "CLEAR") {
+        clearAllDigits();
         return;
       }
 
@@ -314,7 +340,7 @@ export function BoothKeypad({
         void submit(next);
       }
     },
-    [clearDigits, submit, tone]
+    [clearAllDigits, deleteLastDigit, submit, tone]
   );
 
   useEffect(() => {
@@ -346,13 +372,14 @@ export function BoothKeypad({
 
       if (/^[0-9]$/.test(e.key)) {
         pressRef.current(e.key);
+      } else if (e.key === "Backspace") {
+        pressRef.current("BACKSPACE");
       } else if (
-        e.key === "*" ||
+        e.key === "Delete" ||
         e.key === "Escape" ||
-        e.key === "Backspace" ||
-        e.key === "Delete"
+        e.key === "*"
       ) {
-        pressRef.current("*");
+        pressRef.current("CLEAR");
       } else {
         return;
       }
@@ -397,26 +424,26 @@ export function BoothKeypad({
   );
 
   return (
-    <div className="w-full max-w-[19rem] rounded-2xl bg-raised border border-line p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        <KeyRound className="w-4 h-4 text-brass shrink-0" aria-hidden />
-        <span className="text-sm font-bold text-ink">도어 키패드</span>
-        <span className="ml-auto text-[11px] text-ink-3">
+    <div className="w-full max-w-2xl mx-auto rounded-2xl bg-raised border border-line p-5 sm:p-7 space-y-5">
+      <div className="flex items-center gap-3">
+        <KeyRound className="w-6 h-6 text-brass shrink-0" aria-hidden />
+        <span className="text-lg font-bold text-ink">도어 키패드</span>
+        <span className="ml-auto text-sm text-ink-3">
           4자리 · 자동 확인
         </span>
       </div>
 
       <div
-        className={`rounded-xl border px-3 py-3 min-h-[5.5rem] flex flex-col items-center justify-center text-center transition-colors ${TONE_CLASS[tone]}`}
+        className={`rounded-xl border px-4 py-5 min-h-[7rem] flex flex-col items-center justify-center text-center transition-colors ${TONE_CLASS[tone]}`}
         role="status"
         aria-live="polite"
         data-testid="keypad-display"
       >
         {message ? (
-          <p className="text-sm font-bold leading-snug flex items-center gap-1.5">
+          <p className="text-base sm:text-lg font-bold leading-snug flex items-center gap-2">
             {tone === "busy" && (
               <Loader2
-                className="w-4 h-4 animate-spin shrink-0"
+                className="w-5 h-5 animate-spin shrink-0"
                 aria-hidden
               />
             )}
@@ -424,18 +451,18 @@ export function BoothKeypad({
           </p>
         ) : (
           <>
-            <span className="text-xs text-ink-3">
+            <span className="text-sm sm:text-base text-ink-3">
               예약 비밀번호를 입력하세요
             </span>
 
             <span
-              className="mt-1.5 flex gap-3"
+              className="mt-3 flex gap-4"
               aria-label={`${digits.length}자리 입력됨`}
             >
               {[0, 1, 2, 3].map((i) => (
                 <span
                   key={i}
-                  className={`w-3.5 h-3.5 rounded-full border-2 ${
+                  className={`w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 ${
                     i < digits.length
                       ? "bg-ink border-ink"
                       : "border-line-strong"
@@ -447,38 +474,48 @@ export function BoothKeypad({
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
         {KEY_ROWS.flat().map((key) => {
           const isDigit = /^[0-9]$/.test(key);
-          const isClear = key === "*";
-          const usable = isDigit || isClear;
+          const isBackspace = key === "BACKSPACE";
+          const isClear = key === "CLEAR";
 
           return (
             <button
               key={key}
               type="button"
-              onClick={() => press(key)}
-              disabled={!usable || tone === "busy"}
+              onClick={() => {
+                console.log("[BUTTON CLICK]", key);
+                press(key);
+              }}
+              disabled={tone === "busy"}
               aria-label={
-                isClear
-                  ? "지움"
-                  : usable
-                    ? key
-                    : `${key} (사용하지 않는 키)`
-              }
-              className={`h-14 rounded-xl border font-mono tnum transition-all select-none flex flex-col items-center justify-center leading-none ${
-                isDigit
-                  ? "bg-surface border-line-strong text-ink text-2xl font-bold hover:bg-canvas active:scale-95 cursor-pointer"
+                isBackspace
+                  ? "지우기"
                   : isClear
-                    ? "bg-live-soft border-live/40 text-live text-lg font-bold hover:bg-live-soft/70 active:scale-95 cursor-pointer"
-                    : "bg-transparent border-line text-ink-3/50 text-base cursor-default"
+                    ? "전체 지우기"
+                    : key
+              }
+              className={`min-h-20 sm:min-h-24 rounded-2xl border font-mono tnum transition-all select-none flex flex-col items-center justify-center gap-1 ${
+                isDigit
+                  ? "bg-surface border-line-strong text-ink text-3xl sm:text-4xl font-bold hover:bg-canvas active:scale-95 cursor-pointer"
+                  : isBackspace
+                    ? "bg-live-soft border-live/40 text-live text-lg sm:text-xl font-bold hover:bg-live-soft/70 active:scale-95 cursor-pointer"
+                    : "bg-canvas border-line-strong text-ink-2 text-base sm:text-lg font-bold hover:bg-surface active:scale-95 cursor-pointer"
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              {key}
-              {isClear && (
-                <span className="text-[10px] font-sans font-bold mt-0.5">
-                  지움
-                </span>
+              {isDigit ? (
+                key
+              ) : isBackspace ? (
+                <>
+                  <Delete className="w-7 h-7 sm:w-8 sm:h-8" aria-hidden />
+                  <span className="font-sans">지우기</span>
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-6 h-6 sm:w-7 sm:h-7" aria-hidden />
+                  <span className="font-sans">전체 지우기</span>
+                </>
               )}
             </button>
           );

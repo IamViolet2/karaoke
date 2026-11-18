@@ -28,6 +28,7 @@ from schemas.reservation import (
     ScoreRecordRequest,
     SongRecordRequest,
     SongVideoRequest,
+    PlaybackStateRequest
 )
 from services.booth_service import BoothService
 from services import scheduler
@@ -965,6 +966,21 @@ async def scheduler_run_once(
     """스케줄러를 즉시 한 번 실행한다. 관리자 전용."""
 
     result = await scheduler.run_once()
+
+    return {
+        "data": result,
+    }
+
+
+
+
+@booth_router.post("/playback-state")
+async def update_playback_state(
+    req: PlaybackStateRequest,
+) -> Dict[str, Any]:
+    """노래 재생 상태에 따른 LED 상태 변경"""
+
+    result = await BoothService.update_playback_led(req.state)
 
     return {
         "data": result,
