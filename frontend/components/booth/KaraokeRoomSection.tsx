@@ -51,6 +51,15 @@ import { apiUrl } from "@/utils/apiConfig";
 
 type YoutubeTestStatus = "untested" | "testing" | "success" | "failed";
 
+type SavedPlaybackState = {
+  songId: string;
+  elapsed: number;
+  wasPlaying: boolean;
+  savedAt: number;
+};
+
+const PLAYBACK_STORAGE_KEY = "karaoke-booth-playback-v1";
+
 // ----------------------------------------------------------------------
 // 대기 / 인증 화면
 // ----------------------------------------------------------------------
@@ -243,6 +252,96 @@ export function KaraokeRoomSection({
   const finishAndScoreRef = useRef<(() => void) | null>(null);
   const selectedSongRef = useRef(selectedSong);
   const attemptIndexRef = useRef(attemptIndex);
+  const restorePlaybackRef = useRef<SavedPlaybackState | null>(null);
+  const restoreCheckedRef = useRef(false);
+
+  // 새로고침 전 마지막 곡과 재생 위치를 브라우저에 보관한다.
+  const savePlaybackSnapshot = useCallback(
+    (position: number, wasPlaying: boolean) => {
+      if (
+        typeof window === "undefined" ||
+        !restoreCheckedRef.current ||
+        scoredRef.current
+      ) return;
+
+      const safePosition = Number.isFinite(position)
+        ? Math.max(0, Math.floor(position))
+        : 0;
+
+      const snapshot: SavedPlaybackState = {
+        songId: selectedSongRef.current.id,
+        elapsed: safePosition,
+        wasPlaying,
+        savedAt: Date.now(),
+      };
+
+      restorePlaybackRef.current = snapshot;
+      try {
+        window.localStorage.setItem(
+          PLAYBACK_STORAGE_KEY,
+          JSON.stringify(snapshot)
+        );
+      } catch (error) {
+        console.warn("[노래방] 재생 상태 저장 실패", error);
+      }
+    },
+    []
+  );
+
+  const clearPlaybackSnapshot = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem(PLAYBACK_STORAGE_KEY);
+    } catch (error) {
+      console.warn("[노래방] 저장된 재생 상태 초기화 실패", error);
+    }
+    restorePlaybackRef.current = null;
+  }, []);
+
+  // 컴포넌트가 다시 열리면 마지막 곡과 위치를 먼저 복원한다.
+  useEffect(() => {
+    if (restoreCheckedRef.current) return;
+    restoreCheckedRef.current = true;
+
+    try {
+      const raw = window.localStorage.getItem(PLAYBACK_STORAGE_KEY);
+      if (!raw) return;
+
+      const saved = JSON.parse(raw) as SavedPlaybackState;
+      const song = KARAOKE_SONGS.find((item) => item.id === saved.songId);
+
+      // 너무 오래된 재생 기록은 복원하지 않는다 (최대 12시간).
+      const isFresh =
+        Number.isFinite(saved.savedAt) &&
+        Date.now() - saved.savedAt <= 12 * 60 * 60 * 1000;
+
+      if (
+        !song ||
+        !isFresh ||
+        !Number.isFinite(saved.elapsed) ||
+        saved.elapsed < 0
+      ) {
+        window.localStorage.removeItem(PLAYBACK_STORAGE_KEY);
+        return;
+      }
+
+      const restored: SavedPlaybackState = {
+        songId: song.id,
+        elapsed: Math.floor(saved.elapsed),
+        wasPlaying: Boolean(saved.wasPlaying),
+        savedAt: saved.savedAt,
+      };
+
+      restorePlaybackRef.current = restored;
+      selectedSongRef.current = song;
+      setSelectedSong(song);
+      setElapsed(restored.elapsed);
+      setDuration(song.approxDurationSec);
+    } catch (error) {
+      console.warn("[노래방] 저장된 재생 상태를 읽지 못했습니다.", error);
+      window.localStorage.removeItem(PLAYBACK_STORAGE_KEY);
+    }
+  }, []);
 
   // ─────────────────────────────────────────────────────────
   // 브라우저 전체화면(F11) 감지
@@ -480,6 +579,7 @@ export function KaraokeRoomSection({
     if (scoredRef.current) return;
 
     scoredRef.current = true;
+    clearPlaybackSnapshot();
 
     // 재생과 분석을 정지하고 현재까지 수집된 데이터로 채점
     stopAllPlayback();
@@ -602,6 +702,7 @@ export function KaraokeRoomSection({
     recordScoreToDB,
     selectedSong,
     stopAllPlayback,
+    clearPlaybackSnapshot,
   ]);
 
   useEffect(() => {
@@ -651,6 +752,20 @@ export function KaraokeRoomSection({
         setDuration(handle.getDuration());
         setPlayerReady(true);
         setPlayerError(null);
+
+        const saved = restorePlaybackRef.current;
+        if (saved && saved.songId === selectedSongRef.current.id) {
+          const maxPosition = handle.getDuration() || saved.elapsed;
+          const resumeAt = Math.min(saved.elapsed, Math.max(0, maxPosition - 1));
+          handle.seekTo(resumeAt);
+          setElapsed(Math.floor(resumeAt));
+
+          if (saved.wasPlaying) {
+            // 브라우저가 자동 재생을 허용하면 이어서 재생한다.
+            // 차단되더라도 저장 위치는 유지되어 재생 버튼으로 이어갈 수 있다.
+            handle.play();
+          }
+        }
       },
 
       onStateChange: (state) => {
@@ -658,6 +773,15 @@ export function KaraokeRoomSection({
 
         if (state === YT_STATE.PLAYING) {
           setIsPlaying(true);
+          const current = ytHandleRef.current?.getCurrentTime() ?? 0;
+          savePlaybackSnapshot(current, true);
+          if (!tickTimerRef.current) {
+            tickTimerRef.current = setInterval(() => {
+              const position = ytHandleRef.current?.getCurrentTime() ?? 0;
+              setElapsed(Math.floor(position));
+              savePlaybackSnapshot(position, true);
+            }, 1000);
+          }
           void reportPlaybackState("playing");
           setDuration(ytHandleRef.current?.getDuration() ?? 0);
 
@@ -669,6 +793,12 @@ export function KaraokeRoomSection({
           setPlayerError(null);
         } else if (state === YT_STATE.PAUSED) {
           setIsPlaying(false);
+          const current = ytHandleRef.current?.getCurrentTime() ?? 0;
+          savePlaybackSnapshot(current, false);
+          if (tickTimerRef.current) {
+            clearInterval(tickTimerRef.current);
+            tickTimerRef.current = null;
+          }
           void reportPlaybackState("paused");
         } else if (state === YT_STATE.ENDED) {
           void reportPlaybackState("ended");
@@ -774,7 +904,7 @@ export function KaraokeRoomSection({
 
       host.innerHTML = "";
     };
-  }, [media?.source, media?.youtubeId, hasEntered, reportPlaybackState]);
+  }, [media?.source, media?.youtubeId, hasEntered, reportPlaybackState, savePlaybackSnapshot]);
 
   // ─────────────────────────────────────────────────────────
   // 가상 마이크
@@ -828,6 +958,7 @@ export function KaraokeRoomSection({
 
     setElapsed(0);
     setPlayerError(null);
+    clearPlaybackSnapshot();
 
     if (
       typeof window !== "undefined" &&
@@ -841,6 +972,7 @@ export function KaraokeRoomSection({
     externalEntryMode,
     stopAllPlayback,
     stopVirtualMic,
+    clearPlaybackSnapshot,
   ]);
 
   useEffect(() => {
@@ -870,17 +1002,24 @@ export function KaraokeRoomSection({
         const total = yt.getDuration();
 
         setElapsed(Math.floor(at));
+        savePlaybackSnapshot(at, true);
 
         if (total > 0 && total - at <= 1) {
           finishAndScoreRef.current?.();
         }
       } else if (localAudioRef.current) {
-        setElapsed(Math.floor(localAudioRef.current.currentTime));
+        const current = localAudioRef.current.currentTime;
+        setElapsed(Math.floor(current));
+        savePlaybackSnapshot(current, true);
       } else {
-        setElapsed((prev) => prev + 1);
+        setElapsed((prev) => {
+          const next = prev + 1;
+          savePlaybackSnapshot(next, true);
+          return next;
+        });
       }
     }, 1000);
-  }, []);
+  }, [savePlaybackSnapshot]);
 
   // ─────────────────────────────────────────────────────────
   // 마이크 제어
@@ -964,7 +1103,11 @@ export function KaraokeRoomSection({
     usedVirtualRef.current = isVirtualMic;
 
     setShowScoreModal(false);
-    setElapsed(0);
+
+    const saved = restorePlaybackRef.current;
+    const resumePosition =
+      saved && saved.songId === selectedSong.id ? saved.elapsed : 0;
+    if (resumePosition <= 0) setElapsed(0);
 
     scorerRef.current?.resetScore();
     scorerRef.current?.resumeAnalysis();
@@ -986,7 +1129,11 @@ export function KaraokeRoomSection({
 
       setPlayerError(null);
 
-      yt.seekTo(0);
+      if (resumePosition > 0) {
+        yt.seekTo(resumePosition);
+      } else {
+        yt.seekTo(0);
+      }
       yt.setVolume(mrVolume * 100);
       yt.play();
 
@@ -1021,7 +1168,17 @@ export function KaraokeRoomSection({
       }
 
       audio.volume = mrVolume;
-      audio.currentTime = 0;
+      if (resumePosition > 0) {
+        const seekWhenReady = () => {
+          try {
+            audio.currentTime = resumePosition;
+          } catch {}
+        };
+        if (audio.readyState >= 1) seekWhenReady();
+        else audio.addEventListener("loadedmetadata", seekWhenReady, { once: true });
+      } else {
+        audio.currentTime = 0;
+      }
 
       audio.onloadedmetadata = () =>
         setDuration(Math.floor(audio.duration || 0));
@@ -1082,7 +1239,9 @@ export function KaraokeRoomSection({
     }
 
     setIsPlaying(true);
+    restorePlaybackRef.current = null;
     startTicker();
+    savePlaybackSnapshot(resumePosition, true);
 
     // 반주가 시작된 직후 1.5초간 주변 소음 기준을 측정한다.
     // 측정 중에는 채점 데이터를 누적하지 않는다.
@@ -1106,12 +1265,19 @@ export function KaraokeRoomSection({
     selectedSong,
     startTicker,
     finishAndScore,
+    savePlaybackSnapshot,
+    elapsed,
   ]);
 
   const handlePause = useCallback(() => {
+    const current =
+      ytHandleRef.current?.getCurrentTime() ??
+      localAudioRef.current?.currentTime ??
+      elapsed;
+    savePlaybackSnapshot(current, false);
     stopAllPlayback();
     scorerRef.current?.pauseAnalysis();
-  }, [stopAllPlayback]);
+  }, [stopAllPlayback, savePlaybackSnapshot, elapsed]);
 
   // ─────────────────────────────────────────────────────────
   // 입장 처리
@@ -1149,6 +1315,9 @@ export function KaraokeRoomSection({
   const handleSelectSong = useCallback(
     (song: KaraokeSong) => {
       stopAllPlayback();
+      selectedSongRef.current = song;
+      restorePlaybackRef.current = null;
+      savePlaybackSnapshot(0, false);
 
       scoredRef.current = false;
       usedVirtualRef.current = false;
@@ -1161,7 +1330,7 @@ export function KaraokeRoomSection({
       setDuration(song.approxDurationSec);
       setShowScoreModal(false);
     },
-    [stopAllPlayback]
+    [stopAllPlayback, savePlaybackSnapshot]
   );
 
   // ─────────────────────────────────────────────────────────
@@ -1341,18 +1510,41 @@ export function KaraokeRoomSection({
                             setDuration(
                               Math.floor(video.duration || 0)
                             );
+
+                            const saved = restorePlaybackRef.current;
+                            if (saved && saved.songId === selectedSongRef.current.id) {
+                              const resumeAt = Math.min(
+                                saved.elapsed,
+                                Math.max(0, (video.duration || saved.elapsed) - 1)
+                              );
+                              video.currentTime = resumeAt;
+                              setElapsed(Math.floor(resumeAt));
+                              if (saved.wasPlaying) {
+                                void video.play().catch(() => {
+                                  setPlayerError("이전 재생 위치는 복원했지만 브라우저에서 자동 재생을 허용하지 않았습니다. 재생 버튼을 눌러 주세요.");
+                                });
+                              }
+                            }
                           }}
                           onTimeUpdate={(event) => {
-                            setElapsed(
-                              Math.floor(event.currentTarget.currentTime)
-                            );
+                            const current = event.currentTarget.currentTime;
+                            setElapsed(Math.floor(current));
+                            savePlaybackSnapshot(current, !event.currentTarget.paused);
                           }}
                           onPlay={() => {
                             setIsPlaying(true);
+                            savePlaybackSnapshot(
+                              localAudioRef.current?.currentTime ?? elapsed,
+                              true
+                            );
                             void reportPlaybackState("playing");
                           }}
                           onPause={() => {
                             setIsPlaying(false);
+                            savePlaybackSnapshot(
+                              localAudioRef.current?.currentTime ?? elapsed,
+                              false
+                            );
                             void reportPlaybackState("paused");
                           }}
                           onEnded={() => {
