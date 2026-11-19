@@ -1107,6 +1107,7 @@ class VisionAIWorker:
         logger.info("AI 추론 스레드 종료")
 
 
+
 # =========================================================
 # WebSocket 영상 전송
 # =========================================================
@@ -1125,6 +1126,10 @@ class VisionStreamSender:
         self.sent_count = 0
         self.sent_fps_start = time.monotonic()
 
+        # 현재 연결된 WebSocket 관리
+        self.active_ws = None
+        self.ws_lock = threading.Lock()
+
         self.thread = threading.Thread(
             target=self._run,
             daemon=True,
@@ -1140,6 +1145,17 @@ class VisionStreamSender:
 
         with self.condition:
             self.condition.notify_all()
+
+        # 수신 대기 중인 WebSocket을 닫아
+        # 수신 스레드가 종료될 수 있도록 한다.
+        with self.ws_lock:
+            ws = self.active_ws
+
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
         self.thread.join(timeout=3)
 
@@ -1170,11 +1186,69 @@ class VisionStreamSender:
         with self.condition:
             return round(self.sent_fps, 2)
 
+    def _receive_loop(
+        self,
+        ws,
+        connection_lost: threading.Event,
+        connection_closing: threading.Event
+    ):
+        """
+        백엔드에서 보내는 WebSocket Ping을 수신한다.
+
+        websocket-client의 recv()는 Ping 프레임을
+        자동으로 처리하고 Pong을 응답한다.
+
+        백엔드에서 별도의 일반 메시지를 보내는 경우에도
+        수신 처리를 계속 유지한다.
+        """
+
+        logger.info("WebSocket Ping/Pong 수신 처리 시작")
+
+        try:
+
+            while (
+                not self.stop_event.is_set()
+                and not connection_closing.is_set()
+            ):
+
+                message = ws.recv()
+
+                # 서버가 연결을 종료한 경우
+                if message is None:
+                    if not connection_closing.is_set():
+                        connection_lost.set()
+                    break
+
+                # 현재 백엔드는 별도 일반 메시지를 보내지 않는다.
+                # Ping/Pong 처리는 recv() 내부에서 수행된다.
+
+        except Exception as exc:
+
+            if (
+                not self.stop_event.is_set()
+                and not connection_closing.is_set()
+            ):
+
+                logger.warning(
+                    "WebSocket 수신 연결 오류: %s",
+                    exc
+                )
+
+                connection_lost.set()
+
+        finally:
+
+            logger.info("WebSocket Ping/Pong 수신 처리 종료")
+
     def _run(self):
 
         while not self.stop_event.is_set():
 
             ws = None
+            receiver_thread = None
+
+            connection_lost = threading.Event()
+            connection_closing = threading.Event()
 
             try:
 
@@ -1188,20 +1262,55 @@ class VisionStreamSender:
                     header=[
                         f"X-Device-Api-Key: {DEVICE_API_KEY}"
                     ],
-                    timeout=5
+                    timeout=5,
+                    enable_multithread=True
                 )
+
+                # 연결 이후 수신 스레드가 계속 대기할 수 있도록
+                # 소켓 읽기 타임아웃을 해제한다.
+                ws.settimeout(None)
+
+                with self.ws_lock:
+                    self.active_ws = ws
 
                 logger.info("Vision WebSocket 연결 성공")
 
                 self.last_sent_frame_id = -1
 
+                # -------------------------------------------------
+                # Ping/Pong 전용 수신 스레드 시작
+                # -------------------------------------------------
+
+                receiver_thread = threading.Thread(
+                    target=self._receive_loop,
+                    args=(
+                        ws,
+                        connection_lost,
+                        connection_closing
+                    ),
+                    daemon=True,
+                    name="VisionWebSocketReceiver"
+                )
+
+                receiver_thread.start()
+
+                # -------------------------------------------------
+                # 기존 영상 전송 루프
+                # -------------------------------------------------
+
                 while not self.stop_event.is_set():
+
+                    if connection_lost.is_set():
+                        raise ConnectionError(
+                            "WebSocket 수신 연결이 종료되었습니다."
+                        )
 
                     with self.condition:
 
                         self.condition.wait_for(
                             lambda:
                                 self.stop_event.is_set()
+                                or connection_lost.is_set()
                                 or (
                                     self.latest_packet is not None
                                     and self.latest_packet["frame_id"]
@@ -1212,6 +1321,11 @@ class VisionStreamSender:
 
                         if self.stop_event.is_set():
                             break
+
+                        if connection_lost.is_set():
+                            raise ConnectionError(
+                                "WebSocket 연결이 끊겼습니다."
+                            )
 
                         packet = self.latest_packet
 
@@ -1276,12 +1390,24 @@ class VisionStreamSender:
 
             finally:
 
+                # 수신 스레드가 종료 중임을 먼저 알린다.
+                connection_closing.set()
+
                 if ws is not None:
 
                     try:
                         ws.close()
                     except Exception:
                         pass
+
+                # 수신 스레드 종료 대기
+                if receiver_thread is not None:
+                    receiver_thread.join(timeout=2)
+
+                with self.ws_lock:
+
+                    if self.active_ws is ws:
+                        self.active_ws = None
 
             if not self.stop_event.is_set():
 

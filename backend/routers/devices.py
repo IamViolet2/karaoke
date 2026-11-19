@@ -297,6 +297,7 @@ async def receive_vision_event(
 # [비전 영상 스트리밍] Vision -> Backend
 # ==============================================================================
 
+
 @device_router.websocket("/vision/stream")
 async def receive_vision_stream(
     websocket: WebSocket,
@@ -313,7 +314,6 @@ async def receive_vision_stream(
 
     await websocket.accept()
 
-    # 연결마다 고유 ID를 발급해 이전 연결과 구분한다.
     connection_id = await vision_frame_store.begin_connection()
 
     logger.info(
@@ -324,14 +324,28 @@ async def receive_vision_stream(
     last_metrics_broadcast = 0.0
     status_broadcasted = False
 
+    # 진단용 정보
+    connection_started_at = time.monotonic()
+    last_frame_id = None
+    frames_received = 0
+    receive_stage = "연결 초기화"
+    last_frame_received_at = None
+
     try:
         while True:
             # 1. 프레임 메타데이터 수신
+            receive_stage = "메타데이터 수신"
             metadata_text = await websocket.receive_text()
+
             metadata = json.loads(metadata_text)
 
             if metadata.get("type") != "frame":
-                logger.warning("알 수 없는 Vision 영상 메시지")
+                logger.warning(
+                    "알 수 없는 Vision 영상 메시지 "
+                    "(connection_id=%s, type=%s)",
+                    connection_id,
+                    metadata.get("type"),
+                )
                 continue
 
             frame_id = int(metadata["frame_id"])
@@ -342,9 +356,11 @@ async def receive_vision_stream(
                 raise ValueError("잘못된 프레임 메타데이터")
 
             # 2. 원본 JPEG 수신
+            receive_stage = "원본 JPEG 수신"
             raw_jpeg = await websocket.receive_bytes()
 
             # 3. AI 처리 JPEG 수신
+            receive_stage = "AI 처리 JPEG 수신"
             processed_jpeg = await websocket.receive_bytes()
 
             max_frame_size = 8 * 1024 * 1024
@@ -361,6 +377,8 @@ async def receive_vision_stream(
             received_at = time.time()
 
             # 4. 최신 프레임 캐시에 저장
+            receive_stage = "프레임 저장"
+
             await vision_frame_store.publish(
                 frame_id=frame_id,
                 captured_at=captured_at,
@@ -371,11 +389,33 @@ async def receive_vision_stream(
                 connection_id=connection_id,
             )
 
+            last_frame_id = frame_id
+            last_frame_received_at = received_at
+            frames_received += 1
+
+            # 최초 연결 상태 브로드캐스트
             if not status_broadcasted:
+                receive_stage = "최초 상태 브로드캐스트"
+
+                broadcast_started = time.monotonic()
+
                 await ws_manager.broadcast({
                     "type": "vision_stream_status",
                     "connected": True,
                 })
+
+                broadcast_ms = (
+                    time.monotonic() - broadcast_started
+                ) * 1000
+
+                if broadcast_ms >= 100:
+                    logger.warning(
+                        "Vision 최초 상태 브로드캐스트 지연 "
+                        "(connection_id=%s, %.1fms)",
+                        connection_id,
+                        broadcast_ms,
+                    )
+
                 status_broadcasted = True
 
             # 5. 프론트엔드 상태 WebSocket에 지표 전송
@@ -386,6 +426,10 @@ async def receive_vision_stream(
                     0.0,
                     (received_at - captured_at) * 1000.0,
                 )
+
+                receive_stage = "성능 지표 브로드캐스트"
+
+                broadcast_started = time.monotonic()
 
                 await ws_manager.broadcast({
                     "type": "vision_metrics",
@@ -403,42 +447,115 @@ async def receive_vision_stream(
                     "processed_size": len(processed_jpeg),
                 })
 
-                last_metrics_broadcast = monotonic_now
+                broadcast_ms = (
+                    time.monotonic() - broadcast_started
+                ) * 1000
 
-    except WebSocketDisconnect:
-        logger.info(
-            "Vision 영상 스트리밍 클라이언트 연결 종료 (connection_id=%s)",
+                if broadcast_ms >= 100:
+                    logger.warning(
+                        "Vision 성능 지표 브로드캐스트 지연 "
+                        "(connection_id=%s, frame_id=%s, %.1fms)",
+                        connection_id,
+                        frame_id,
+                        broadcast_ms,
+                    )
+
+                last_metrics_broadcast = time.monotonic()
+
+            receive_stage = "다음 프레임 대기"
+
+    except WebSocketDisconnect as exc:
+        elapsed = time.monotonic() - connection_started_at
+
+        logger.warning(
+            "Vision WebSocket 연결 종료 감지 "
+            "(connection_id=%s, code=%s, reason=%r, "
+            "last_frame_id=%s, frames_received=%s, "
+            "last_stage=%s, elapsed=%.1fs, "
+            "last_frame_received_at=%s)",
             connection_id,
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+            last_frame_id,
+            frames_received,
+            receive_stage,
+            elapsed,
+            last_frame_received_at,
         )
 
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        logger.warning(f"Vision 영상 데이터 형식 오류: {exc}")
+        logger.warning(
+            "Vision 영상 데이터 형식 오류 "
+            "(connection_id=%s, last_frame_id=%s, "
+            "frames_received=%s, stage=%s): %s",
+            connection_id,
+            last_frame_id,
+            frames_received,
+            receive_stage,
+            exc,
+        )
 
         try:
-            await websocket.close(code=1003, reason="Invalid frame data")
+            await websocket.close(
+                code=1003,
+                reason="Invalid frame data",
+            )
         except Exception:
-            pass
+            logger.debug(
+                "Vision 오류 종료 메시지 전송 실패",
+                exc_info=True,
+            )
 
-    except Exception as exc:
-        logger.warning(f"Vision 영상 수신 오류: {exc}")
+    except Exception:
+        logger.exception(
+            "Vision 영상 수신 중 예외 발생 "
+            "(connection_id=%s, last_frame_id=%s, "
+            "frames_received=%s, stage=%s)",
+            connection_id,
+            last_frame_id,
+            frames_received,
+            receive_stage,
+        )
 
         try:
-            await websocket.close(code=1011, reason="Vision stream error")
+            await websocket.close(
+                code=1011,
+                reason="Vision stream error",
+            )
         except Exception:
-            pass
+            logger.debug(
+                "Vision 예외 종료 메시지 전송 실패",
+                exc_info=True,
+            )
 
     finally:
-        # 이 연결이 현재 연결인 경우에만 종료 처리된다.
+        # 이 연결이 현재 연결인 경우에만 종료 처리
         await vision_frame_store.mark_disconnected(connection_id)
 
-        # 실제 마지막 프레임 수신 시각을 기준으로 상태를 계산한다.
-        # 재연결 중 유예시간이 남아 있다면 connected=True를 유지한다.
         current_status = vision_frame_store.get_status()
 
-        await ws_manager.broadcast({
-            "type": "vision_stream_status",
-            "connected": current_status["connected"],
-        })
+        try:
+            await ws_manager.broadcast({
+                "type": "vision_stream_status",
+                "connected": current_status["connected"],
+            })
+        except Exception:
+            logger.exception(
+                "Vision 연결 종료 상태 브로드캐스트 실패 "
+                "(connection_id=%s)",
+                connection_id,
+            )
+
+        logger.info(
+            "Vision 영상 스트리밍 정리 완료 "
+            "(connection_id=%s, last_frame_id=%s, "
+            "frames_received=%s, connected=%s)",
+            connection_id,
+            last_frame_id,
+            frames_received,
+            current_status["connected"],
+        )
+
 
 
 # ==============================================================================
