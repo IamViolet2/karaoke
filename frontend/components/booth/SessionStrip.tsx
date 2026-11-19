@@ -33,6 +33,24 @@ export function formatClock(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/** 경고 기준 초를 사람이 읽기 쉬운 문장으로 변환 */
+function formatWarningTime(sec: number): string {
+  if (sec % 60 === 0) {
+    return `${sec / 60}분 전`;
+  }
+
+  if (sec >= 60) {
+    const minutes = Math.floor(sec / 60);
+    const seconds = sec % 60;
+
+    return seconds > 0
+      ? `${minutes}분 ${seconds}초 전`
+      : `${minutes}분 전`;
+  }
+
+  return `${sec}초 전`;
+}
+
 /** 남은 시간 "12:34" — 서버 기준. 알 수 없으면 아무것도 그리지 않는다 */
 export function RemainingClock({
   session,
@@ -78,9 +96,18 @@ export function SessionStrip({
   const left = remainingSeconds(session, now || session?.fetchedAt || 0);
   const until = endsAtLabel(session);
   const endingSoon = left !== null && left <= 60;
-  const warn10 =
-    ledBlink ||
-    (session?.kind === "reservation" && left !== null && left <= 600);
+  const warnBeforeSec =
+    typeof session?.warn_before_sec === "number"
+      ? session.warn_before_sec
+      : null;
+
+  const warnBefore =
+    session?.kind === "reservation" &&
+    left !== null &&
+    warnBeforeSec !== null &&
+    left <= warnBeforeSec;
+
+  const showWarning = ledBlink || warnBefore;
 
   return (
     <div
@@ -117,12 +144,12 @@ export function SessionStrip({
         </span>
       )}
 
-      {(endingSoon || warn10) && (
+      {(endingSoon || showWarning) && (
         <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-400/[0.10] px-3 py-1.5 font-bold text-amber-200">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
           {endingSoon
             ? "곧 끝납니다 — 마무리해 주세요"
-            : "종료 10분 전 — 정리를 준비해 주세요"}
+            : `종료 ${warnBeforeSec !== null ? formatWarningTime(warnBeforeSec) : "임박"} — 정리를 준비해 주세요`}
         </span>
       )}
     </div>

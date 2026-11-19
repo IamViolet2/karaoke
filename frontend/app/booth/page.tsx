@@ -61,9 +61,10 @@ export default function BoothPage() {
     }
   }, [normalUserAuthorized, isDoorUnlocked, doorWasOpenedForUser]);
 
-  const canShowKaraoke =
-    normalUserAuthorized && doorWasOpenedForUser && isDoorUnlocked;
   const session = useBoothSession(isPowerOn);
+
+  const canShowKaraoke =
+    isPowerOn && session?.kind === "reservation";
 
   return (
     <div className="fixed inset-0 min-h-screen overflow-hidden bg-black">

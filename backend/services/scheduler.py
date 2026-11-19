@@ -449,6 +449,7 @@ def current_session(
                         (end - current_time).total_seconds()
                     ),
                 ),
+                "warn_before_sec": WARN_BEFORE_SEC,
             }
 
     except Exception as exc:
@@ -459,6 +460,7 @@ def current_session(
 
     return {
         "kind": None,
+        "warn_before_sec": WARN_BEFORE_SEC,
     }
 
 

@@ -72,6 +72,8 @@ export interface BoothSession {
   ends_at?: string;
   /** 서버 시계로 잰 남은 시간(초) — 부스 PC 시계가 틀려도 맞게 나온다 */
   remaining_sec?: number;
+  /** 백엔드가 계산한 종료 전 경고 기준(초) */
+  warn_before_sec?: number;
 }
 
 /** 채점 결과 한 건 (부록G §2-④ 점수 저장 + 실시간 랭킹) */
