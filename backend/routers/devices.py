@@ -1,3 +1,4 @@
+
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
@@ -101,7 +102,6 @@ async def control_device(
             detail={"code": "CONTROL_FAILED", "message": f"디바이스 제어에 실패했습니다: {exc}"}
         )
 
-    # 대시보드 실시간 반영 브로드캐스트
     await ws_manager.broadcast({
         "type": "device_state",
         "device_id": device_id,
@@ -194,10 +194,6 @@ async def report_device_state(
 
     # 1. 액추에이터 반영 결과 보고 처리
     if request.state is not None:
-        # DB가 잠깐 끊겨도 파이의 보고를 500으로 되돌려주면 안 된다.
-        # 파이는 재시도 로직이 단순해서 500을 받으면 그 보고를 잃어버리고,
-        # 대시보드는 영영 확정 상태를 받지 못한다. 다른 조회 엔드포인트와
-        # 마찬가지로 기록만 실패하고 흐름은 계속 이어간다.
         try:
             db.update_current_state(device_id, request.state, request.value)
             db.log_control_action(device_id, request.state, request.value, actor="device")
@@ -264,7 +260,6 @@ async def receive_vision_event(
     """
     now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # DB에 비전 이벤트 기록
     try:
         db.log_vision_event(
             event_type=request.event_type,
@@ -275,7 +270,6 @@ async def receive_vision_event(
     except Exception as exc:
         logger.warning(f"Failed to log vision event in DB: {exc}")
 
-    # 대시보드에 실시간 브로드캐스트
     await ws_manager.broadcast({
         "type": "vision_event",
         "event_type": request.event_type,
@@ -285,7 +279,6 @@ async def receive_vision_event(
         "created_at": now_str
     })
 
-    # [트리거 규칙 연동 - 3단계] 사람 감지 시 부스 환영 안내 및 스피커/조명 자동 연동
     if request.detected and "person" in request.event_type.lower():
         try:
             from services.booth_service import BoothService
@@ -316,13 +309,17 @@ async def receive_vision_stream(
       1. JSON 메타데이터 (Text)
       2. 원본 JPEG (Bytes)
       3. AI 처리 JPEG (Bytes)
-
-    각 프레임은 동일한 frame_id와 captured_at을 사용한다.
     """
 
     await websocket.accept()
 
-    logger.info("Vision 영상 스트리밍 클라이언트 연결")
+    # 연결마다 고유 ID를 발급해 이전 연결과 구분한다.
+    connection_id = await vision_frame_store.begin_connection()
+
+    logger.info(
+        "Vision 영상 스트리밍 클라이언트 연결 (connection_id=%s)",
+        connection_id,
+    )
 
     last_metrics_broadcast = 0.0
     status_broadcasted = False
@@ -350,7 +347,6 @@ async def receive_vision_stream(
             # 3. AI 처리 JPEG 수신
             processed_jpeg = await websocket.receive_bytes()
 
-            # 비정상적으로 큰 프레임은 거부
             max_frame_size = 8 * 1024 * 1024
 
             if not raw_jpeg or not processed_jpeg:
@@ -372,8 +368,9 @@ async def receive_vision_stream(
                 raw_jpeg=raw_jpeg,
                 processed_jpeg=processed_jpeg,
                 received_at=received_at,
+                connection_id=connection_id,
             )
-            
+
             if not status_broadcasted:
                 await ws_manager.broadcast({
                     "type": "vision_stream_status",
@@ -382,7 +379,6 @@ async def receive_vision_stream(
                 status_broadcasted = True
 
             # 5. 프론트엔드 상태 WebSocket에 지표 전송
-            # 매 프레임마다 브로드캐스트하지 않고 최대 1초에 한 번 전송
             monotonic_now = time.monotonic()
 
             if monotonic_now - last_metrics_broadcast >= 1.0:
@@ -410,7 +406,10 @@ async def receive_vision_stream(
                 last_metrics_broadcast = monotonic_now
 
     except WebSocketDisconnect:
-        logger.info("Vision 영상 스트리밍 클라이언트 연결 종료")
+        logger.info(
+            "Vision 영상 스트리밍 클라이언트 연결 종료 (connection_id=%s)",
+            connection_id,
+        )
 
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         logger.warning(f"Vision 영상 데이터 형식 오류: {exc}")
@@ -429,11 +428,16 @@ async def receive_vision_stream(
             pass
 
     finally:
-        await vision_frame_store.mark_disconnected()
+        # 이 연결이 현재 연결인 경우에만 종료 처리된다.
+        await vision_frame_store.mark_disconnected(connection_id)
+
+        # 실제 마지막 프레임 수신 시각을 기준으로 상태를 계산한다.
+        # 재연결 중 유예시간이 남아 있다면 connected=True를 유지한다.
+        current_status = vision_frame_store.get_status()
 
         await ws_manager.broadcast({
             "type": "vision_stream_status",
-            "connected": False,
+            "connected": current_status["connected"],
         })
 
 
@@ -461,7 +465,6 @@ async def generate_mjpeg(stream_type: str):
         last_frame_id = frame["frame_id"]
         jpeg = frame["jpeg"]
 
-        # MJPEG 프레임 헤더
         headers = (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n"

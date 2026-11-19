@@ -14,6 +14,8 @@ class VisionFrameStore:
     프레임을 무한정 쌓지 않고 최신 프레임 한 쌍만 유지한다.
     """
 
+    CONNECTION_TIMEOUT_SECONDS = 5.0
+
     def __init__(self):
         self._condition = asyncio.Condition()
 
@@ -29,6 +31,33 @@ class VisionFrameStore:
         self._captured_at: Optional[float] = None
         self._inference_ms: Optional[float] = None
 
+        # WebSocket 연결 세대 관리
+        self._connection_generation = 0
+        self._active_connection_id: Optional[int] = None
+
+    async def begin_connection(self) -> int:
+        """
+        새로운 Vision WebSocket 연결을 등록한다.
+
+        새 연결이 시작되면 이전 연결의 ID는 더 이상 유효하지 않다.
+        """
+
+        async with self._condition:
+            self._connection_generation += 1
+            self._active_connection_id = self._connection_generation
+            self._vision_connected = True
+
+            connection_id = self._active_connection_id
+
+            self._condition.notify_all()
+
+        logger.info(
+            "Vision 영상 스트림 연결 시작 (connection_id=%s)",
+            connection_id,
+        )
+
+        return connection_id
+
     async def publish(
         self,
         frame_id: int,
@@ -37,9 +66,12 @@ class VisionFrameStore:
         raw_jpeg: bytes,
         processed_jpeg: bytes,
         received_at: Optional[float] = None,
+        connection_id: Optional[int] = None,
     ) -> None:
         """
         원본 영상과 처리 영상을 한 쌍으로 저장한다.
+
+        이전 연결에서 늦게 도착한 프레임은 무시한다.
         """
 
         if not raw_jpeg or not processed_jpeg:
@@ -48,6 +80,17 @@ class VisionFrameStore:
         now = received_at if received_at is not None else time.time()
 
         async with self._condition:
+            # 새 연결이 이미 시작됐다면 이전 연결의 프레임은 무시
+            if (
+                connection_id is not None
+                and connection_id != self._active_connection_id
+            ):
+                logger.debug(
+                    "이전 Vision 연결의 프레임 무시 (connection_id=%s)",
+                    connection_id,
+                )
+                return
+
             self._frames["raw"] = {
                 "frame_id": frame_id,
                 "captured_at": captured_at,
@@ -119,6 +162,9 @@ class VisionFrameStore:
     def get_status(self) -> Dict[str, Any]:
         """
         Vision 연결 상태와 최신 프레임 정보를 반환한다.
+
+        WebSocket이 종료되더라도 마지막 프레임이 5초 이내라면
+        일시적인 재연결 구간으로 보고 연결 상태를 유지한다.
         """
 
         now = time.time()
@@ -128,13 +174,13 @@ class VisionFrameStore:
             connected = False
         else:
             frame_age_ms = round(
-                (now - self._last_received_at) * 1000,
+                max(0.0, (now - self._last_received_at) * 1000),
                 2,
             )
 
             connected = (
-                self._vision_connected
-                and frame_age_ms <= 5000
+                frame_age_ms
+                <= self.CONNECTION_TIMEOUT_SECONDS * 1000
             )
 
         return {
@@ -152,16 +198,44 @@ class VisionFrameStore:
             },
         }
 
-    async def mark_disconnected(self) -> None:
+    async def mark_disconnected(
+        self,
+        connection_id: Optional[int] = None,
+    ) -> None:
         """
-        Vision WebSocket 연결 종료 시 호출한다.
+        현재 Vision WebSocket 연결 종료를 기록한다.
+
+        이전 연결의 종료 처리가 새 연결 상태에 영향을 주지 않도록
+        connection_id를 확인한다.
+
+        실제 연결 상태는 마지막 프레임 수신 시각을 기준으로
+        최대 5초의 유예시간을 적용한다.
         """
 
         async with self._condition:
-            self._vision_connected = False
+            # 이전 연결이 늦게 종료된 경우 현재 상태를 변경하지 않는다.
+            if (
+                connection_id is not None
+                and connection_id != self._active_connection_id
+            ):
+                logger.info(
+                    "이전 Vision 연결 종료 처리 무시 (connection_id=%s)",
+                    connection_id,
+                )
+                return
+
+            if connection_id is None or (
+                connection_id == self._active_connection_id
+            ):
+                self._active_connection_id = None
+                self._vision_connected = False
+
             self._condition.notify_all()
 
-        logger.warning("Vision 영상 스트림 연결 종료")
+        logger.warning(
+            "Vision 영상 스트림 연결 종료 (connection_id=%s)",
+            connection_id,
+        )
 
 
 # =========================================================
